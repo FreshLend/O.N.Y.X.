@@ -1,0 +1,34 @@
+{
+  "name": "Matrix",
+  "author": "FreshGame",
+  "description": "Классический зелёный терминал",
+  "colors": {
+    "bg":        "#0a0e0a",
+    "bg2":       "#050805",
+    "bg3":       "#0a1a0a",
+    "bg4":       "#0d240d",
+    "bg5":       "#0d1f0d",
+    "fg":        "#00ff41",
+    "fg_dim":    "#008822",
+    "fg_soft":   "#00aa2b",
+    "fg_dark":   "#005511",
+    "border":    "#003300",
+    "border_hi": "#00ff41",
+    "sel_bg":    "#00ff41",
+    "sel_fg":    "#000000",
+    "danger":    "#ff3355",
+    "warning":   "#ffaa00",
+    "success":   "#00ff41",
+    "shadow":    "rgba(0, 0, 0, 0.9)"
+  },
+  "fonts": {
+    "family": "'Consolas', 'Courier New', monospace",
+    "size": 12,
+    "size_small": 11,
+    "size_title": 24,
+    "size_h1": 16,
+    "size_icon": 28
+  },
+  "radius": 4,
+  "spacing": 6
+}

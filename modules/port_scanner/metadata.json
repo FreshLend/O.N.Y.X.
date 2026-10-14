@@ -1,0 +1,12 @@
+{
+  "name": "Port Scanner",
+  "version": "1.0.0",
+  "author": "FreshGame",
+  "description": "TCP/UDP port scanner with SYN scan, OS fingerprinting and banner grabbing.",
+  "icon": "🔌",
+  "icon_name": null,
+  "dependencies": {},
+  "optional_dependencies": {
+    "vault": ">=1.0.0"
+  }
+}

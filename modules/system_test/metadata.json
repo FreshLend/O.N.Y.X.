@@ -1,0 +1,21 @@
+{
+  "name": "System Test",
+  "version": "1.0.0",
+  "author": "FreshGame",
+  "description": "End-to-end self-check.",
+  "icon": "🧪",
+  "icon_name": null,
+  "dependencies": {},
+  "optional_dependencies": {
+    "http_client": ">=1.0.0",
+    "vault": ">=1.0.0",
+    "encoder": ">=1.0.0",
+    "jwt_decoder": ">=1.0.0",
+    "login_flow": ">=1.0.0",
+    "proxy_manager": ">=1.0.0",
+    "scanner": ">=1.0.0",
+    "reporter": ">=1.0.0",
+    "diff": ">=1.0.0",
+    "collections": ">=1.0.0"
+  }
+}

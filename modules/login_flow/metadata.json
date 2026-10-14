@@ -1,0 +1,13 @@
+{
+  "name": "Login Flow",
+  "version": "1.0.0",
+  "author": "FreshGame",
+  "description": "Log in or register on any site with profile-driven requests and 2FA.",
+  "icon": "🔑",
+  "icon_name": null,
+  "dependencies": {
+    "http_client": ">=1.0.0",
+    "vault": ">=1.0.0"
+  },
+  "optional_dependencies": {}
+}

@@ -1,0 +1,10 @@
+{
+  "name": "Diff",
+  "version": "1.0.0",
+  "author": "FreshGame",
+  "description": "Compare two texts or JSON documents and highlight the differences.",
+  "icon": "📊",
+  "icon_name": null,
+  "dependencies": {},
+  "optional_dependencies": {}
+}

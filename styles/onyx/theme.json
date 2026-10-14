@@ -1,0 +1,34 @@
+{
+  "name": "Onyx",
+  "author": "FreshLend",
+  "description": "Фирменная тема SWARM / O.N.Y.X. — обсидиан и лёд.",
+  "colors": {
+    "bg":        "#08090c",
+    "bg2":       "#050608",
+    "bg3":       "#0e1015",
+    "bg4":       "#141820",
+    "bg5":       "#11141c",
+    "fg":        "#8fc9ff",
+    "fg_dim":    "#4a6d8c",
+    "fg_soft":   "#66a8d8",
+    "fg_dark":   "#243546",
+    "border":    "#151b26",
+    "border_hi": "#8fc9ff",
+    "sel_bg":    "#8fc9ff",
+    "sel_fg":    "#050608",
+    "danger":    "#ff4d6d",
+    "warning":   "#ffb84d",
+    "success":   "#66d9a0",
+    "shadow":    "rgba(0, 0, 0, 0.95)"
+  },
+  "fonts": {
+    "family": "'Consolas', 'Courier New', monospace",
+    "size": 12,
+    "size_small": 11,
+    "size_title": 22,
+    "size_h1": 16,
+    "size_icon": 28
+  },
+  "radius": 4,
+  "spacing": 6
+}

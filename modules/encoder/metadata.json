@@ -1,0 +1,10 @@
+{
+  "name": "Encoder / Decoder",
+  "version": "1.0.0",
+  "author": "FreshGame",
+  "description": "Encode, decode and hash text in a dozen common formats.",
+  "icon": "🔐",
+  "icon_name": null,
+  "dependencies": {},
+  "optional_dependencies": {}
+}

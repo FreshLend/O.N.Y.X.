@@ -1,0 +1,12 @@
+{
+  "name": "Scanner",
+  "version": "1.0.0",
+  "author": "FreshGame",
+  "description": "Brute-force directories and hidden paths on a target URL.",
+  "icon": "🔍",
+  "icon_name": null,
+  "dependencies": {
+    "http_client": ">=1.0.0"
+  },
+  "optional_dependencies": {}
+}

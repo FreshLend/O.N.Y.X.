@@ -1,0 +1,12 @@
+{
+  "name": "Proxy Manager",
+  "version": "1.0.0",
+  "author": "FreshGame",
+  "description": "Keep a list of proxies, check them and pick the active one.",
+  "icon": "🌐",
+  "icon_name": null,
+  "dependencies": {
+    "http_client": ">=1.0.0"
+  },
+  "optional_dependencies": {}
+}

@@ -1,0 +1,12 @@
+{
+  "name": "JWT Decoder",
+  "version": "1.0.0",
+  "author": "FreshGame",
+  "description": "Inspect JWT tokens, check expiry and verify signatures.",
+  "icon": "🎫",
+  "icon_name": null,
+  "dependencies": {
+    "encoder": ">=1.0.0"
+  },
+  "optional_dependencies": {}
+}

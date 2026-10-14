@@ -1,0 +1,22 @@
+{
+  "name": "Encoder / Decoder",
+  "description": "Encode, decode and hash text in a dozen common formats.",
+  "mode": "MODE:",
+  "input": "INPUT",
+  "output": "OUTPUT",
+  "swap": "SWAP",
+  "copy": "COPY OUT",
+  "status.ok": "OK  ({steps} step(s))",
+  "status.error": "Error at step {step} ({op}): {error}",
+  "status.no_ops": "No operations — passthrough",
+  "status.cancelled": "Cancelled",
+  "pipeline": "PIPELINE (applied top to bottom)",
+  "add_op": "+ ADD OP",
+  "clear_pipe": "CLEAR ALL",
+  "detect": "AUTO-DETECT",
+  "detect.title": "Auto-detect",
+  "detect.found": "Detected: {op}",
+  "detect.not_found": "Could not guess the format.",
+  "xor.title": "XOR key",
+  "xor.prompt": "Key (text):"
+}

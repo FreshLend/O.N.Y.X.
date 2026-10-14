@@ -1,0 +1,14 @@
+PySide6
+requests
+requests[socks]
+beautifulsoup4
+PyJWT
+curl_cffi
+cloudscraper
+cryptography
+keyring
+flask
+werkzeug
+pyotp
+scapy
+dnspython

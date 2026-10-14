@@ -1,0 +1,168 @@
+QWidget {
+    background-color: $bg;
+    color: $fg;
+    font-family: $family;
+    font-size: ${size}px;
+}
+
+QMainWindow { background-color: $bg2; }
+
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox {
+    background-color: $bg2;
+    color: $fg;
+    border: 1px solid $border;
+    padding: $spacing;
+    selection-background-color: $sel_bg;
+    selection-color: $sel_fg;
+}
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus {
+    border: 1px solid $border_hi;
+}
+
+QPushButton {
+    background-color: $bg3;
+    color: $fg;
+    border: 1px solid $border_hi;
+    padding: 8px 16px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+QPushButton:hover { background-color: $fg; color: #000000; }
+QPushButton:pressed { background-color: $fg_soft; }
+QPushButton:disabled { color: $fg_dark; border-color: $border; }
+
+QComboBox::drop-down { border: none; width: 20px; }
+QComboBox QAbstractItemView {
+    background-color: $bg;
+    color: $fg;
+    border: 1px solid $border_hi;
+    selection-background-color: $sel_bg;
+    selection-color: $sel_fg;
+}
+
+QLabel { background-color: transparent; }
+
+QFrame#card {
+    background-color: $bg3;
+    border: 1px solid $border;
+    border-radius: ${radius}px;
+}
+QFrame#card:hover { border: 1px solid $border_hi; background-color: $bg4; }
+
+QFrame#header {
+    background-color: $bg2;
+    border-bottom: 1px solid $border;
+}
+
+QTabWidget::pane { border: 1px solid $border; background-color: $bg2; top: -1px; }
+QTabBar { background-color: $bg2; qproperty-drawBase: 0; }
+QTabBar::tab {
+    background-color: $bg3;
+    color: $fg_dim;
+    border: 1px solid $border;
+    border-bottom: none;
+    padding: 8px 18px;
+    margin-right: 2px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+QTabBar::tab:selected {
+    background-color: $bg4;
+    color: $fg;
+    border: 1px solid $border_hi;
+    border-bottom: 1px solid $bg4;
+}
+QTabBar::tab:hover:!selected { background-color: $bg5; color: $fg_soft; }
+
+QHeaderView { background-color: $bg3; border: none; }
+QHeaderView::section {
+    background-color: $bg3;
+    color: $fg;
+    border: 1px solid $border;
+    border-top: none;
+    padding: 6px 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+QHeaderView::section:hover { background-color: $bg4; }
+QHeaderView::up-arrow, QHeaderView::down-arrow {
+    width: 10px; height: 10px; background-color: $fg;
+}
+
+QTreeWidget, QTableWidget, QTreeView, QTableView, QListView {
+    background-color: $bg2;
+    color: $fg;
+    border: 1px solid $border;
+    alternate-background-color: $bg3;
+    gridline-color: $border;
+    selection-background-color: $sel_bg;
+    selection-color: $sel_fg;
+    outline: none;
+}
+QTreeWidget::item, QTableWidget::item, QTreeView::item, QTableView::item, QListView::item {
+    padding: 3px 4px;
+    border: none;
+}
+QTreeWidget::item:selected, QTableWidget::item:selected,
+QTreeView::item:selected, QTableView::item:selected, QListView::item:selected {
+    background-color: $sel_bg;
+    color: $sel_fg;
+}
+QTreeWidget::item:hover, QTableWidget::item:hover,
+QTreeView::item:hover, QTableView::item:hover {
+    background-color: $bg4;
+}
+
+QGroupBox {
+    border: 1px solid $border;
+    border-radius: ${radius}px;
+    margin-top: 12px;
+    padding-top: 8px;
+    color: $fg_soft;
+    font-weight: bold;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 6px;
+    background-color: $bg;
+    color: $fg;
+    letter-spacing: 1px;
+}
+
+QScrollBar:vertical { background: $bg2; width: 10px; }
+QScrollBar::handle:vertical { background: $fg_soft; min-height: 20px; }
+QScrollBar::handle:vertical:hover { background: $fg; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; background: none; }
+QScrollBar:horizontal { background: $bg2; height: 10px; }
+QScrollBar::handle:horizontal { background: $fg_soft; min-width: 20px; }
+QScrollBar::handle:horizontal:hover { background: $fg; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; background: none; }
+
+QSplitter::handle { background-color: $border; }
+
+QMenu { background-color: $bg3; border: 1px solid $border_hi; color: $fg; }
+QMenu::item:selected { background-color: $fg; color: #000000; }
+
+QToolTip {
+    background-color: $bg3;
+    color: $fg;
+    border: 1px solid $border_hi;
+    padding: 4px;
+}
+
+QDialog, QMessageBox { background-color: $bg; }
+QMessageBox QLabel { color: $fg; }
+QMessageBox QPushButton { min-width: 90px; }
+
+QTableCornerButton::section {
+    background-color: $bg3;
+    border: 1px solid $border;
+    border-top: none;
+    border-left: none;
+}
+
+QTableWidget QTableCornerButton::section {
+    background-color: $bg3;
+}
