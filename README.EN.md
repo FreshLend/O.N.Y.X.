@@ -23,11 +23,12 @@ O.N.Y.X. is a desktop application that brings together tools that usually exist 
 
 | Module | Purpose |
 |---|---|
-| **HTTP Client** | HTTP requests with three engines (requests, curl_cffi, cloudscraper), cookie jar, redirect chain, hex dump of responses, HTML tree, profiles, curl import/export |
+| **HTTP Client** | HTTP requests with three engines (requests, curl_cffi, cloudscraper), session manager with cookie editor and per-engine cookie jars, redirect chain, hex dump of responses, HTML tree, profiles, curl import/export, request cancel, TTFB timing |
+| **WebSocket Client** | WebSocket sessions over ws:// and wss://, custom headers, subprotocols, text and binary frames, hex dump for binary, per-message detail, ping/pong, history timeline, proxy support, `{{vault.key}}` in URL and headers |
 | **Port Scanner** | TCP/UDP port scan: SYN mode, OS fingerprinting via TTL, banner grabbing, service detection (OpenSSH, nginx, uvicorn, mysql, and more) |
 | **DNS Lookup** | DNS resolution: A, AAAA, CNAME, MX, NS, TXT, SOA, SRV, CAA, PTR. Custom nameserver, IPv4/IPv6, reverse lookup for IPs, export to JSON/CSV/TXT |
 | **Scanner** | Directory brute-force: soft-404 wildcard filter, extension fuzzing, User-Agent rotation, proxy support, result export |
-| **Collections** | Request sets with assertions (status, body, JSON path, time), extract to vault, retry/delay, conditional execution, parallel runs, data-driven runs from CSV/JSON, CLI runner, auto re-auth on 401 with TOTP |
+| **Collections** | Request sets over HTTP and WebSocket with assertions (status, body, JSON path, time), extract to vault, retry/delay, conditional execution, bounded re-auth on 401 with TOTP, configurable parallel workers, per-collection cookie isolation, data-driven runs from CSV/JSON, CLI runner |
 | **Login Flow** | Login profiles: JSON / form-data / Basic / OAuth2 (client_credentials, password, refresh_token), two-step 2FA flow, token auto-detection in responses, TOTP, CAPTCHA hook |
 | **JWT Decoder** | JWT parsing, HS256/384/512 signature verification, secret brute-force, token generation, none-attack, live expiry timer |
 | **Vault** | Encrypted Fernet vault: TTL, namespaces, key rotation, bulk import/export, search |
@@ -35,7 +36,7 @@ O.N.Y.X. is a desktop application that brings together tools that usually exist 
 | **Diff** | Text comparison: unified, side-by-side, word-level; JSON / XML / YAML modes; ignore whitespace / case / dynamic keys |
 | **Proxy Manager** | Proxy list with parallel checks, dead-proxy auto-disable, latency stats, rotation, import/export |
 | **Reporter** | Reports in Markdown / HTML / JSON / PDF with filters by module and session, status chart, snapshot comparison of runs |
-| **System Test** | End-to-end self-check: 100+ steps with embedded Flask server and test HTTP proxy |
+| **System Test** | End-to-end self-check: 100+ steps with embedded Flask server, test HTTP proxy and test WebSocket server |
 
 ---
 

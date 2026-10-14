@@ -23,11 +23,12 @@ O.N.Y.X. — десктопное приложение, которое объе�
 
 | Модуль | Назначение |
 |---|---|
-| **HTTP Client** | HTTP-запросы: три движка (requests, curl_cffi, cloudscraper), cookie-jar, redirect chain, hex-дамп ответов, HTML-дерево, профили, curl import/export |
+| **HTTP Client** | HTTP-запросы: три движка (requests, curl_cffi, cloudscraper), менеджер сессий с редактором cookies и отдельным cookie-jar на каждый движок, redirect chain, hex-дамп ответов, HTML-дерево, профили, curl import/export, отмена запроса, TTFB |
+| **WebSocket Client** | WebSocket-сессии по ws:// и wss://, кастомные заголовки, субпротоколы, текстовые и бинарные фреймы, hex-дамп для бинарных, детали каждого сообщения, ping/pong, таймлайн истории, поддержка прокси, `{{vault.key}}` в URL и заголовках |
 | **Port Scanner** | TCP/UDP-скан портов: SYN-режим, OS fingerprinting по TTL, баннер-граббинг, определение сервисов (OpenSSH, nginx, uvicorn, mysql и др.) |
 | **DNS Lookup** | Резолв DNS: A, AAAA, CNAME, MX, NS, TXT, SOA, SRV, CAA, PTR. Свой nameserver, IPv4/IPv6, reverse lookup для IP, экспорт JSON/CSV/TXT |
 | **Scanner** | Брутфорс директорий: wildcard-фильтр soft-404, extension-фаззинг, ротация User-Agent, поддержка прокси, экспорт результатов |
-| **Collections** | Наборы запросов: ассерты (status, body, JSON path, time), extract в vault, retry/delay, conditional execution, параллельность, data-driven прогон из CSV/JSON, CLI runner, auto re-auth при 401 с TOTP |
+| **Collections** | Наборы запросов по HTTP и WebSocket: ассерты (status, body, JSON path, time), extract в vault, retry/delay, conditional execution, ограниченный re-auth при 401 с TOTP, настраиваемое число параллельных воркеров, изоляция cookies на коллекцию, data-driven прогон из CSV/JSON, CLI runner |
 | **Login Flow** | Профили логина: JSON / form-data / Basic / OAuth2 (client_credentials, password, refresh_token), двухшаговый flow с 2FA, автоопределение токена в ответе, TOTP, CAPTCHA-хук |
 | **JWT Decoder** | Разбор JWT, проверка подписи HS256/384/512, brute-force секрета, генерация токенов, none-attack, live-таймер истечения |
 | **Vault** | Шифрованное хранилище Fernet: TTL, namespaces, ротация ключа, bulk import/export, поиск |
@@ -35,7 +36,7 @@ O.N.Y.X. — десктопное приложение, которое объе�
 | **Diff** | Сравнение текстов: unified, side-by-side, word-level; режимы JSON / XML / YAML; опции ignore whitespace / case / dynamic keys |
 | **Proxy Manager** | Список прокси с параллельной проверкой, автоотключением мёртвых, статистикой latency, ротацией, import/export |
 | **Reporter** | Отчёты Markdown / HTML / JSON / PDF с фильтрами по модулю и сессии, график статусов, snapshot-сравнение прогонов |
-| **System Test** | Сквозная самопроверка: 100+ шагов со встроенным Flask-сервером и тестовым HTTP-прокси |
+| **System Test** | Сквозная самопроверка: 100+ шагов со встроенным Flask-сервером, тестовым HTTP-прокси и тестовым WebSocket-сервером |
 
 ---
 
