@@ -1,9 +1,15 @@
-# SWARM / O.N.Y.X.
+# SWARM / O.N.Y.X. **RU** | [EN](README.EN.md)
 
-> **O**rchestrated **N**etwork **Y**ield e**X**tensible  
-> модульный инструмент для анализа сетей
+<p align="center">
+  <img src="icon.png" alt="O.N.Y.X." width="256">
+</p>
 
-**RU** | [EN](README.EN.md)
+<h1 align="center">O.N.Y.X.</h1>
+
+<p align="center">
+  <em>Orchestrated · Network · Yield · eXtensible</em><br>
+  модульный инструмент для анализа сетей
+</p>
 
 ---
 
