@@ -4,7 +4,7 @@
   "author": "FreshGame",
   "description": "Encrypted key-value store shared between modules.",
   "icon": "🔐",
-  "icon_name": null,
+  "icon_name": "vault",
   "dependencies": {},
   "optional_dependencies": {}
 }

@@ -2,9 +2,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget,
-    QTableWidgetItem, QHeaderView, QPushButton, QAbstractItemView,
-    QMessageBox, QCheckBox, QWidget
+    QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
+    QHeaderView, QPushButton, QAbstractItemView, QMessageBox,
+    QCheckBox, QWidget
 )
 
 from .module_spec import scan_specs

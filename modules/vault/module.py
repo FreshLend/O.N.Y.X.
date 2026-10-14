@@ -3,13 +3,13 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QMessageBox, QPlainTextEdit, QCheckBox, QSpinBox, QComboBox,
-    QFileDialog, QInputDialog
+    QMessageBox, QPlainTextEdit, QSpinBox, QComboBox,
+    QFileDialog
 )
 
 from core.base_module import BaseModule
@@ -89,7 +89,7 @@ class _Crypto:
         self.available = False
         self.mode = "plaintext"
         try:
-            from cryptography.fernet import Fernet  # noqa
+            from cryptography.fernet import Fernet
         except ImportError:
             return
         key = _get_or_create_key()

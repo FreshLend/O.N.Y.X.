@@ -2,7 +2,6 @@ import csv
 import errno
 import ipaddress
 import json
-import os
 import re
 import socket
 import threading

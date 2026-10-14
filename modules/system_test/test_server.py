@@ -1,5 +1,7 @@
+import asyncio
 import json
 import secrets
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -12,6 +14,13 @@ try:
     import pyotp
 except ImportError:
     pyotp = None
+
+try:
+    import websockets
+    HAS_WEBSOCKETS = True
+except ImportError:
+    websockets = None
+    HAS_WEBSOCKETS = False
 
 JWT_SECRET = "swarm-onyx-test-secret-do-not-use-in-prod"
 TOTP_SECRET = "JBSWY3DPEHPK3PXP"
@@ -297,11 +306,6 @@ def _build_app():
                 return _j({"ok": True, "comment": c})
         return _j({"ok": False, "error": "not found"}, 404)
 
-    @app.route("/api/debug")
-    def debug():
-        return _j({"ok": True, "jwt_secret": JWT_SECRET,
-                   "totp_secret": TOTP_SECRET})
-
     @app.route("/admin")
     def admin_page():
         return Response("Forbidden", status=403, mimetype="text/plain")
@@ -336,7 +340,6 @@ class TestServer:
         try:
             self._server = make_server("127.0.0.1", 0, self.app, threaded=True)
             self.port = self._server.server_port
-            import threading
             self._thread = threading.Thread(
                 target=self._server.serve_forever, daemon=True)
             self._thread.start()
@@ -363,3 +366,166 @@ class TestServer:
     @property
     def url(self):
         return f"http://127.0.0.1:{self.port}" if self.port else None
+
+
+class WSTestServer:
+    def __init__(self):
+        self._loop = None
+        self._server = None
+        self._thread = None
+        self._ready = threading.Event()
+        self.port = None
+        self._shutdown_done = threading.Event()
+
+    @staticmethod
+    def _extract_path(ws, args):
+        if len(args) > 1 and isinstance(args[1], str):
+            return args[1]
+        request = getattr(ws, "request", None)
+        if request is not None:
+            p = getattr(request, "path", None)
+            if isinstance(p, str):
+                return p
+        p = getattr(ws, "path", None)
+        if isinstance(p, str):
+            return p
+        return "/"
+
+    @staticmethod
+    def _extract_headers(ws):
+        request = getattr(ws, "request", None)
+        if request is not None:
+            h = getattr(request, "headers", None)
+            if h is not None:
+                try:
+                    return dict(h)
+                except Exception:
+                    pass
+        h = getattr(ws, "request_headers", None)
+        if h is not None:
+            try:
+                return dict(h)
+            except Exception:
+                pass
+        return {}
+
+    async def _handle(self, ws, path):
+        try:
+            print(f"[ws_test_server] path={path!r}")
+            if path.startswith("/echo"):
+                async for msg in ws:
+                    if isinstance(msg, bytes):
+                        await ws.send(b"BIN:" + msg)
+                    else:
+                        await ws.send("TXT:" + str(msg))
+            elif path == "/once":
+                await ws.send("welcome")
+                await ws.close(1000, "done")
+            elif path.startswith("/slow"):
+                for i in range(5):
+                    await ws.send(f"msg-{i}")
+                    await asyncio.sleep(0.05)
+                await ws.close(1000, "done")
+            elif path == "/headers":
+                hdrs = self._extract_headers(ws)
+                async for msg in ws:
+                    await ws.send(json.dumps(hdrs))
+                    break
+                try:
+                    async for _ in ws:
+                        pass
+                except Exception:
+                    pass
+            elif path == "/reject":
+                await ws.close(1008, "policy violation")
+            else:
+                await ws.send(f"path={path}")
+                await ws.close(1000, "done")
+        except Exception as e:
+            print(f"[ws_test_server] handler error: {e}")
+
+    async def _dispatch(self, *args):
+        if not args:
+            return
+        ws = args[0]
+        path = self._extract_path(ws, args)
+        await self._handle(ws, path)
+
+    async def _serve(self):
+        self._server = await websockets.serve(
+            self._dispatch, "127.0.0.1", 0)
+        try:
+            self.port = self._server.sockets[0].getsockname()[1]
+        except Exception:
+            self.port = None
+        self._ready.set()
+
+        try:
+            await self._server.wait_closed()
+        except Exception:
+            pass
+
+        current = asyncio.current_task()
+        tasks = [t for t in asyncio.all_tasks() if t is not current]
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def start(self) -> bool:
+        if self._server is not None:
+            return True
+        if not HAS_WEBSOCKETS:
+            return False
+
+        def runner():
+            try:
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+                self._loop.run_until_complete(self._serve())
+            except Exception as e:
+                print(f"[ws_test_server] {e}")
+                self._ready.set()
+            finally:
+                try:
+                    if self._loop is not None and not self._loop.is_closed():
+                        self._loop.run_until_complete(asyncio.sleep(0))
+                except Exception:
+                    pass
+                try:
+                    if self._loop is not None and not self._loop.is_closed():
+                        self._loop.close()
+                except Exception:
+                    pass
+                self._shutdown_done.set()
+
+        self._ready.clear()
+        self._shutdown_done.clear()
+        self._thread = threading.Thread(target=runner, daemon=True)
+        self._thread.start()
+        self._ready.wait(timeout=5)
+        return self.port is not None
+
+    def stop(self):
+        if self._server is None and self._loop is None:
+            return
+        loop = self._loop
+        server = self._server
+        if loop is not None and not loop.is_closed() and server is not None:
+            try:
+                loop.call_soon_threadsafe(server.close)
+            except Exception:
+                pass
+        if self._thread is not None:
+            try:
+                self._thread.join(timeout=5)
+            except Exception:
+                pass
+        self._server = None
+        self._thread = None
+        self._loop = None
+        self.port = None
+
+    @property
+    def url(self):
+        return f"ws://127.0.0.1:{self.port}" if self.port else None

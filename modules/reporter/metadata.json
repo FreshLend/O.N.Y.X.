@@ -4,7 +4,7 @@
   "author": "FreshGame",
   "description": "Build reports from request history and export them.",
   "icon": "📝",
-  "icon_name": null,
+  "icon_name": "reporter",
   "dependencies": {},
   "optional_dependencies": {}
 }

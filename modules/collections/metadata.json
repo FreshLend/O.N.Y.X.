@@ -1,15 +1,16 @@
 {
   "name": "Collections",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "FreshGame",
   "description": "Group requests into named sets with assertions, variables and retries.",
   "icon": "📚",
-  "icon_name": null,
+  "icon_name": "collections",
   "dependencies": {
     "http_client": ">=1.0.0",
     "vault": ">=1.0.0"
   },
   "optional_dependencies": {
-    "login_flow": ">=1.0.0"
+    "login_flow": ">=1.0.0",
+    "websocket": ">=1.0.0"
   }
 }

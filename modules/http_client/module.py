@@ -1,10 +1,9 @@
 import json
 import os
-import re
+import threading
 import time
-import uuid
+from collections import OrderedDict
 from pathlib import Path
-from urllib.parse import urlparse
 
 import requests
 from PySide6.QtCore import Qt, QThread, Signal
@@ -14,7 +13,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QPushButton, QSplitter, QMessageBox,
     QInputDialog, QFileDialog, QTabWidget, QGroupBox, QFormLayout,
     QCheckBox, QSpinBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QTreeWidget, QTreeWidgetItem, QAbstractItemView, QMenu
+    QTreeWidget, QTreeWidgetItem, QAbstractItemView, QMenu, QDialog
 )
 
 from core.base_module import BaseModule
@@ -38,28 +37,189 @@ AUTH_PRESETS = {
 }
 
 
-_session_store = {}
+def _log(msg):
+    try:
+        print(f"[http_client] {msg}")
+    except Exception:
+        pass
+
+
+class SessionStore:
+    MAX_SESSIONS = 64
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._sessions = OrderedDict()
+        self._kinds = {}
+
+    def _key(self, engine, name):
+        return f"{engine}:{name}"
+
+    def get_requests(self, name):
+        key = self._key("requests", name)
+        with self._lock:
+            sess = self._sessions.get(key)
+            if sess is None:
+                sess = requests.Session()
+                self._sessions[key] = sess
+                self._kinds[key] = "requests"
+                self._trim()
+            else:
+                self._sessions.move_to_end(key)
+            return sess
+
+    def get_curl_cffi(self, name, impersonate="chrome"):
+        key = self._key("curl_cffi", name)
+        with self._lock:
+            sess = self._sessions.get(key)
+            if sess is None:
+                try:
+                    from curl_cffi import requests as creq
+                except ImportError:
+                    raise RuntimeError("curl_cffi not installed")
+                sess = None
+                try:
+                    sess = creq.Session(impersonate=impersonate or "chrome")
+                except TypeError:
+                    try:
+                        sess = creq.Session()
+                    except Exception as e:
+                        raise RuntimeError(f"curl_cffi Session failed: {e}")
+                if sess is None:
+                    raise RuntimeError("curl_cffi Session creation failed")
+                self._sessions[key] = sess
+                self._kinds[key] = "curl_cffi"
+                self._trim()
+            else:
+                self._sessions.move_to_end(key)
+            return sess
+
+    def get_cloudscraper(self, name):
+        key = self._key("cloudscraper", name)
+        with self._lock:
+            sess = self._sessions.get(key)
+            if sess is None:
+                try:
+                    import cloudscraper
+                except ImportError:
+                    raise RuntimeError("cloudscraper not installed")
+                sess = cloudscraper.create_scraper(
+                    browser={"browser": "chrome", "platform": "windows",
+                             "mobile": False})
+                self._sessions[key] = sess
+                self._kinds[key] = "cloudscraper"
+                self._trim()
+            else:
+                self._sessions.move_to_end(key)
+            return sess
+
+    def list(self):
+        with self._lock:
+            out = []
+            for key, sess in self._sessions.items():
+                try:
+                    cookies = list(getattr(sess, "cookies", []) or [])
+                except Exception:
+                    cookies = []
+                out.append({
+                    "key": key,
+                    "engine": self._kinds.get(key, "?"),
+                    "cookies": len(cookies),
+                })
+            return out
+
+    def clear_one(self, key):
+        with self._lock:
+            sess = self._sessions.pop(key, None)
+            self._kinds.pop(key, None)
+        if sess is not None:
+            try:
+                sess.close()
+            except Exception:
+                pass
+            return True
+        return False
+
+    def clear_all(self):
+        with self._lock:
+            sessions = list(self._sessions.values())
+            self._sessions.clear()
+            self._kinds.clear()
+        for s in sessions:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    def _trim(self):
+        while len(self._sessions) > self.MAX_SESSIONS:
+            key, sess = self._sessions.popitem(last=False)
+            self._kinds.pop(key, None)
+            try:
+                sess.close()
+            except Exception:
+                pass
+
+
+_session_store = SessionStore()
 
 
 def _get_session(name="default"):
-    if name not in _session_store:
-        s = requests.Session()
-        _session_store[name] = s
-    return _session_store[name]
+    return _session_store.get_requests(name)
+
+
+def _validate_headers(headers):
+    if not headers:
+        return None
+    for k, v in headers.items():
+        try:
+            f"{k}: {v}".encode("latin-1")
+        except UnicodeEncodeError:
+            return (k, v)
+    return None
+
+
+def _validate_url(url):
+    if not url:
+        return "empty"
+    if "<" in url or ">" in url:
+        return "placeholder"
+    try:
+        url.encode("ascii")
+    except UnicodeEncodeError:
+        return "non_ascii"
+    return None
 
 
 def _dispatch_request(*, engine, method, url, headers, body,
                       proxies, timeout, verify, allow_redirects, impersonate,
                       session_name=None, capture_redirects=False):
+    bad_url = _validate_url(url)
+    if bad_url == "placeholder":
+        return {"ok": False, "error": "URL contains placeholder <...>",
+                "engine": engine}
+    if bad_url == "non_ascii":
+        return {"ok": False, "error": "URL contains non-ASCII characters",
+                "engine": engine}
+
+    bad_hdr = _validate_headers(headers)
+    if bad_hdr is not None:
+        k, v = bad_hdr
+        return {
+            "ok": False,
+            "error": (f"Header '{k}' contains non-latin-1 characters. "
+                      f"HTTP headers must be ASCII/latin-1."),
+            "engine": engine,
+        }
+
     data = body.encode("utf-8") if body else None
-    sess = _get_session(session_name or "default")
+    name = session_name or "default"
 
     if engine == "curl_cffi":
         try:
-            from curl_cffi import requests as creq
-        except ImportError:
-            raise RuntimeError("curl_cffi not installed")
-        adapter = creq.Session()
+            adapter = _session_store.get_curl_cffi(name, impersonate)
+        except RuntimeError as e:
+            return {"ok": False, "error": str(e), "engine": engine}
         kwargs = dict(headers=headers, data=data, timeout=timeout,
                       verify=verify, allow_redirects=False,
                       impersonate=impersonate or "chrome")
@@ -67,21 +227,27 @@ def _dispatch_request(*, engine, method, url, headers, body,
             kwargs["proxies"] = proxies
     elif engine == "cloudscraper":
         try:
-            import cloudscraper
-        except ImportError:
-            raise RuntimeError("cloudscraper not installed")
-        adapter = cloudscraper.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "mobile": False})
+            adapter = _session_store.get_cloudscraper(name)
+        except RuntimeError as e:
+            return {"ok": False, "error": str(e), "engine": engine}
         kwargs = dict(headers=headers, data=data, timeout=timeout,
                       allow_redirects=False)
         if proxies:
             kwargs["proxies"] = proxies
     else:
-        adapter = sess
+        adapter = _session_store.get_requests(name)
         kwargs = dict(headers=headers, data=data, timeout=timeout,
                       verify=verify, allow_redirects=False)
         if proxies:
             kwargs["proxies"] = proxies
+
+    timings = {}
+
+    def _resp_hook(resp, **kw):
+        try:
+            timings["elapsed"] = resp.elapsed.total_seconds()
+        except Exception:
+            pass
 
     chain = []
     current_url = url
@@ -94,10 +260,22 @@ def _dispatch_request(*, engine, method, url, headers, body,
     t_start = time.time()
     for hop in range(max_hops):
         hop_start = time.time()
-        resp = adapter.request(current_method, current_url,
-                                headers=current_headers,
-                                data=current_data, **{k: v for k, v in kwargs.items()
-                                                      if k not in ("headers", "data")})
+
+        req_kwargs = {k: v for k, v in kwargs.items()
+                      if k not in ("headers", "data")}
+        if engine in ("requests", "cloudscraper"):
+            req_kwargs["hooks"] = {"response": _resp_hook}
+
+        try:
+            resp = adapter.request(
+                current_method, current_url,
+                headers=current_headers, data=current_data,
+                **req_kwargs
+            )
+        except Exception as e:
+            _log(f"request error on {current_method} {current_url}: {e}")
+            raise
+
         hop_elapsed = time.time() - hop_start
         chain.append({
             "url": current_url,
@@ -130,18 +308,28 @@ def _dispatch_request(*, engine, method, url, headers, body,
     try:
         for c in adapter.cookies:
             cookies[c.name] = c.value
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"cookie read failed: {e}")
 
     try:
         raw = final.content
-    except Exception:
+    except Exception as e:
+        _log(f"content read failed: {e}")
         raw = b""
 
     try:
         text = final.text
     except Exception:
         text = raw.decode("utf-8", errors="replace")
+
+    ttfb = timings.get("elapsed")
+    if ttfb is None:
+        try:
+            ttfb = getattr(final, "elapsed", None)
+            if ttfb is not None and hasattr(ttfb, "total_seconds"):
+                ttfb = ttfb.total_seconds()
+        except Exception:
+            ttfb = None
 
     return {
         "ok": True,
@@ -151,6 +339,7 @@ def _dispatch_request(*, engine, method, url, headers, body,
         "body": text,
         "raw": raw,
         "elapsed": total_elapsed,
+        "ttfb": ttfb,
         "engine": engine,
         "redirect_chain": chain,
         "cookies": cookies,
@@ -163,14 +352,262 @@ class RequestWorker(QThread):
     def __init__(self, **kwargs):
         super().__init__()
         self._kwargs = kwargs
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
         try:
+            if self._cancelled:
+                self.finished.emit({"ok": False, "error": "cancelled",
+                                    "engine": self._kwargs.get("engine")})
+                return
             result = _dispatch_request(**self._kwargs)
+            if self._cancelled:
+                result = {"ok": False, "error": "cancelled",
+                          "engine": self._kwargs.get("engine")}
         except Exception as e:
+            _log(f"RequestWorker exception: {e}")
             result = {"ok": False, "error": str(e),
                       "engine": self._kwargs.get("engine")}
         self.finished.emit(result)
+
+
+class CookieEditorDialog(QDialog):
+    def __init__(self, parent, session_name, session):
+        super().__init__(parent)
+        self.setWindowTitle(tr("cookies.editor.title", module="http_client"))
+        self.setMinimumSize(620, 420)
+        self._session = session
+        self._session_name = session_name
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels([
+            tr("cookies.col.name", module="http_client"),
+            tr("cookies.col.value", module="http_client"),
+            tr("cookies.col.domain", module="http_client"),
+            tr("cookies.col.path", module="http_client"),
+            tr("cookies.col.expires", module="http_client"),
+        ])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.DoubleClicked
+                                    | QAbstractItemView.EditKeyPressed)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        layout.addWidget(self.table, 1)
+
+        btns = QHBoxLayout()
+        add_btn = QPushButton(tr("cookies.add", module="http_client"))
+        add_btn.clicked.connect(self._add_row)
+        btns.addWidget(add_btn)
+
+        del_btn = QPushButton(tr("cookies.delete_row", module="http_client"))
+        del_btn.clicked.connect(self._delete_row)
+        btns.addWidget(del_btn)
+
+        imp_btn = QPushButton(tr("cookies.import", module="http_client"))
+        imp_btn.clicked.connect(self._import_json)
+        btns.addWidget(imp_btn)
+
+        exp_btn = QPushButton(tr("cookies.export", module="http_client"))
+        exp_btn.clicked.connect(self._export_json)
+        btns.addWidget(exp_btn)
+
+        btns.addStretch()
+
+        save_btn = QPushButton(tr("cookies.apply", module="http_client"))
+        save_btn.clicked.connect(self._apply)
+        btns.addWidget(save_btn)
+
+        cancel_btn = QPushButton(tr("cookies.cancel", module="http_client"))
+        cancel_btn.clicked.connect(self.reject)
+        btns.addWidget(cancel_btn)
+
+        layout.addLayout(btns)
+
+        self._load()
+
+    def _load(self):
+        try:
+            items = list(self._session.cookies)
+        except Exception as e:
+            _log(f"cookie dialog load failed: {e}")
+            items = []
+        self.table.setRowCount(len(items))
+        for i, c in enumerate(items):
+            self.table.setItem(i, 0, QTableWidgetItem(c.name or ""))
+            self.table.setItem(i, 1, QTableWidgetItem(c.value or ""))
+            self.table.setItem(i, 2, QTableWidgetItem(c.domain or ""))
+            self.table.setItem(i, 3, QTableWidgetItem(c.path or "/"))
+            exp = ""
+            try:
+                if c.expires:
+                    exp = str(c.expires)
+            except Exception:
+                exp = ""
+            self.table.setItem(i, 4, QTableWidgetItem(exp))
+
+    def _add_row(self):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setItem(row, 0, QTableWidgetItem(""))
+        self.table.setItem(row, 1, QTableWidgetItem(""))
+        self.table.setItem(row, 2, QTableWidgetItem(""))
+        self.table.setItem(row, 3, QTableWidgetItem("/"))
+        self.table.setItem(row, 4, QTableWidgetItem(""))
+
+    def _delete_row(self):
+        sel = self.table.selectionModel().selectedRows()
+        if not sel:
+            return
+        self.table.removeRow(sel[0].row())
+
+    def _import_json(self):
+        path, _ = QFileDialog.getOpenFileName(
+            parent_widget(self), tr("cookies.import.title", module="http_client"),
+            "", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            QMessageBox.warning(parent_widget(self),
+                                tr("msg.error.title", module="http_client"), str(e))
+            return
+        if not isinstance(data, dict):
+            return
+        for k, v in data.items():
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            self.table.setItem(row, 0, QTableWidgetItem(str(k)))
+            self.table.setItem(row, 1, QTableWidgetItem(str(v)))
+            self.table.setItem(row, 2, QTableWidgetItem(""))
+            self.table.setItem(row, 3, QTableWidgetItem("/"))
+            self.table.setItem(row, 4, QTableWidgetItem(""))
+
+    def _export_json(self):
+        path, _ = QFileDialog.getSaveFileName(
+            parent_widget(self), tr("cookies.export.title", module="http_client"),
+            "cookies.json", "JSON (*.json)")
+        if not path:
+            return
+        out = {}
+        for i in range(self.table.rowCount()):
+            k = self.table.item(i, 0)
+            v = self.table.item(i, 1)
+            if k and v and k.text():
+                out[k.text()] = v.text()
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            QMessageBox.warning(parent_widget(self),
+                                tr("msg.error.title", module="http_client"), str(e))
+
+    def _apply(self):
+        try:
+            self._session.cookies.clear()
+        except Exception:
+            pass
+        for i in range(self.table.rowCount()):
+            name = self.table.item(i, 0)
+            value = self.table.item(i, 1)
+            if not name or not value:
+                continue
+            n = name.text().strip()
+            v = value.text()
+            if not n:
+                continue
+            try:
+                self._session.cookies.set(n, v, domain=None, path="/")
+            except Exception as e:
+                _log(f"cookie set failed for {n}: {e}")
+        self.accept()
+
+
+class SessionsDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle(tr("sessions.title", module="http_client"))
+        self.setMinimumSize(520, 360)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        info = QLabel(tr("sessions.hint", module="http_client"))
+        info.setStyleSheet(f"color: {_c('fg_dim')}; font-size: 11px;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels([
+            tr("sessions.col.key", module="http_client"),
+            tr("sessions.col.engine", module="http_client"),
+            tr("sessions.col.cookies", module="http_client"),
+        ])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        layout.addWidget(self.table, 1)
+
+        btns = QHBoxLayout()
+        refresh_btn = QPushButton(tr("sessions.refresh", module="http_client"))
+        refresh_btn.clicked.connect(self._refresh)
+        btns.addWidget(refresh_btn)
+
+        del_btn = QPushButton(tr("sessions.clear_one", module="http_client"))
+        del_btn.clicked.connect(self._clear_one)
+        btns.addWidget(del_btn)
+
+        del_all_btn = QPushButton(tr("sessions.clear_all", module="http_client"))
+        del_all_btn.clicked.connect(self._clear_all)
+        btns.addWidget(del_all_btn)
+
+        btns.addStretch()
+        close_btn = QPushButton(tr("sessions.close", module="http_client"))
+        close_btn.clicked.connect(self.accept)
+        btns.addWidget(close_btn)
+        layout.addLayout(btns)
+
+        self._refresh()
+
+    def _refresh(self):
+        items = _session_store.list()
+        self.table.setRowCount(len(items))
+        for i, s in enumerate(items):
+            self.table.setItem(i, 0, QTableWidgetItem(s["key"]))
+            self.table.setItem(i, 1, QTableWidgetItem(s["engine"]))
+            self.table.setItem(i, 2, QTableWidgetItem(str(s["cookies"])))
+
+    def _selected_key(self):
+        sel = self.table.selectionModel().selectedRows()
+        if not sel:
+            return None
+        return self.table.item(sel[0].row(), 0).text()
+
+    def _clear_one(self):
+        key = self._selected_key()
+        if not key:
+            return
+        if _session_store.clear_one(key):
+            self._refresh()
+
+    def _clear_all(self):
+        if QMessageBox.question(
+            parent_widget(self),
+            tr("sessions.clear_all.confirm.title", module="http_client"),
+            tr("sessions.clear_all.confirm.text", module="http_client"),
+        ) != QMessageBox.Yes:
+            return
+        _session_store.clear_all()
+        self._refresh()
 
 
 class HttpClientModule(BaseModule):
@@ -203,10 +640,12 @@ class HttpClientModule(BaseModule):
         w = getattr(self, "worker", None)
         if w is not None:
             try:
+                w.cancel()
                 w.wait(3000)
-            except Exception:
-                pass
+            except Exception as e:
+                _log(f"worker shutdown failed: {e}")
         self.worker = None
+        _session_store.clear_all()
 
     def on_load(self, api):
         api.register_service(self.name, "http.request", self._svc_request,
@@ -235,6 +674,14 @@ class HttpClientModule(BaseModule):
                              "http.snippet.delete(name) -> bool")
         api.register_service(self.name, "http.engines", self._svc_engines,
                              "http.engines() -> list[str]")
+        api.register_service(self.name, "http.sessions.list", self._svc_sessions_list,
+                             "http.sessions.list() -> list[dict]")
+        api.register_service(self.name, "http.sessions.clear_one",
+                             self._svc_sessions_clear_one,
+                             "http.sessions.clear_one(key) -> bool")
+        api.register_service(self.name, "http.sessions.clear",
+                             self._svc_sessions_clear,
+                             "http.sessions.clear() -> bool")
 
     def _svc_request(self, method, url, headers=None, body=None,
                      timeout=30, verify=True, allow_redirects=True,
@@ -250,6 +697,7 @@ class HttpClientModule(BaseModule):
                 session_name=session_name,
             )
         except Exception as e:
+            _log(f"svc_request exception: {e}")
             result = {"ok": False, "error": str(e), "engine": engine}
 
         result.pop("raw", None)
@@ -271,8 +719,8 @@ class HttpClientModule(BaseModule):
                     headers=headers or {}, body=body or "",
                     error=result.get("error"),
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            _log(f"history write failed: {e}")
         return result
 
     def _svc_curl_parse(self, cmd):
@@ -289,7 +737,8 @@ class HttpClientModule(BaseModule):
             with open(self.PROFILES_DIR / f"{name}.json", "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             return True
-        except Exception:
+        except Exception as e:
+            _log(f"profile save failed: {e}")
             return False
 
     def _svc_profile_load(self, name):
@@ -300,6 +749,7 @@ class HttpClientModule(BaseModule):
             with open(path, "r", encoding="utf-8") as f:
                 return {"ok": True, "data": json.load(f)}
         except Exception as e:
+            _log(f"profile load failed: {e}")
             return {"ok": False, "error": str(e)}
 
     def _svc_profile_list(self):
@@ -318,7 +768,8 @@ class HttpClientModule(BaseModule):
         try:
             path.unlink()
             return True
-        except Exception:
+        except Exception as e:
+            _log(f"profile delete failed: {e}")
             return False
 
     def _svc_snippet_save(self, name, body):
@@ -347,16 +798,26 @@ class HttpClientModule(BaseModule):
     def _svc_engines(self):
         engines = ["requests"]
         try:
-            import curl_cffi  # noqa
+            import curl_cffi
             engines.append("curl_cffi")
         except ImportError:
             pass
         try:
-            import cloudscraper  # noqa
+            import cloudscraper
             engines.append("cloudscraper")
         except ImportError:
             pass
         return engines
+
+    def _svc_sessions_list(self):
+        return _session_store.list()
+
+    def _svc_sessions_clear_one(self, key):
+        return _session_store.clear_one(key)
+
+    def _svc_sessions_clear(self):
+        _session_store.clear_all()
+        return True
 
     def _load_snippets_raw(self):
         if not self.SNIPPETS_FILE.exists():
@@ -364,7 +825,8 @@ class HttpClientModule(BaseModule):
         try:
             with open(self.SNIPPETS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except Exception as e:
+            _log(f"snippets read failed: {e}")
             return []
 
     def _write_snippets_raw(self, snippets):
@@ -373,7 +835,8 @@ class HttpClientModule(BaseModule):
             with open(self.SNIPPETS_FILE, "w", encoding="utf-8") as f:
                 json.dump(snippets, f, ensure_ascii=False, indent=2)
             return True
-        except Exception:
+        except Exception as e:
+            _log(f"snippets write failed: {e}")
             return False
 
     def create_widget(self):
@@ -396,6 +859,7 @@ class HttpClientModule(BaseModule):
         self.tabs.addTab(self._build_redirects_tab(), "")
         self.tabs.addTab(self._build_html_tab(), "")
         self.tabs.addTab(self._build_history_tab(), "")
+        self.tabs.addTab(self._build_cookies_tab(), "")
         layout.addWidget(self.tabs, 1)
 
         bottom = QHBoxLayout()
@@ -419,7 +883,7 @@ class HttpClientModule(BaseModule):
         self.send_btn = QPushButton()
         self.send_btn.setIcon(theme_loader.get_icon(icon_name="play", emoji=">", size=14))
         self.send_btn.setFixedWidth(220)
-        self.send_btn.clicked.connect(self._send)
+        self.send_btn.clicked.connect(self._send_or_cancel)
         bottom.addWidget(self.send_btn)
 
         layout.addLayout(bottom)
@@ -428,6 +892,7 @@ class HttpClientModule(BaseModule):
         self._refresh_snippets()
         self._refresh_history()
         self._refresh_cookies_view()
+        self._refresh_sessions_label()
 
         self.retranslate()
         return root
@@ -442,6 +907,7 @@ class HttpClientModule(BaseModule):
         self.tabs.setTabText(2, t("tab.redirects"))
         self.tabs.setTabText(3, t("tab.html"))
         self.tabs.setTabText(4, t("tab.history"))
+        self.tabs.setTabText(5, t("tab.cookies"))
         self._lbls["profile"].setText(t("profile"))
         self._btns["profile_save"].setText(t("profile.save"))
         self._btns["profile_export"].setText(t("profile.export"))
@@ -479,17 +945,23 @@ class HttpClientModule(BaseModule):
             t("redirects.col.num"), t("redirects.col.status"),
             t("redirects.col.method"), t("redirects.col.url"),
             t("redirects.col.location"), t("redirects.col.time")])
-        self.cookies_table.setHorizontalHeaderLabels([
-            t("cookies.col.name"), t("cookies.col.value")])
         self.cookies_title.setText(t("cookies.title"))
+        self.cookies_hint.setText(t("cookies.hint"))
         self._btns["cookies_refresh"].setText(t("cookies.refresh"))
         self._btns["cookies_clear"].setText(t("cookies.clear"))
         self._btns["cookies_save"].setText(t("cookies.save"))
+        self._btns["cookies_edit"].setText(t("cookies.edit"))
+        self._btns["cookies_sessions"].setText(t("cookies.sessions"))
+        self.cookies_table.setHorizontalHeaderLabels([
+            t("cookies.col.name"), t("cookies.col.value")])
         self.binary_label.setText(t("binary.hint"))
         self.copy_curl_btn.setText(t("bottom.copy_curl"))
         self.copy_resp_btn.setText(t("bottom.copy_response"))
         self.clear_btn.setText(t("bottom.clear"))
-        self.send_btn.setText(t("bottom.send"))
+        if self.worker is not None and self.worker.isRunning():
+            self.send_btn.setText(t("bottom.cancel"))
+        else:
+            self.send_btn.setText(t("bottom.send"))
         self.auth_lbl.setText(t("auth.label"))
         self._btns["auth_apply"].setText(t("auth.apply"))
 
@@ -753,49 +1225,52 @@ class HttpClientModule(BaseModule):
             bar.addWidget(b)
         layout.addLayout(bar)
 
-        splitter = QSplitter(Qt.Horizontal)
-
-        left = QWidget()
-        ll = QVBoxLayout(left)
-        ll.setContentsMargins(0, 0, 0, 0)
         self.history_table = QTableWidget()
         self.history_table.setColumnCount(6)
         self.history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.history_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.history_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.history_table.doubleClicked.connect(self._load_history_selected)
-        ll.addWidget(self.history_table)
+        layout.addWidget(self.history_table, 1)
+        return page
 
-        right = QWidget()
-        rl = QVBoxLayout(right)
-        rl.setContentsMargins(0, 0, 0, 0)
+    def _build_cookies_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
         self.cookies_title = QLabel()
         self.cookies_title.setStyleSheet(f"color: {_c('fg_dim')}; font-size: 11px;")
-        rl.addWidget(self.cookies_title)
-        crow = QHBoxLayout()
+        layout.addWidget(self.cookies_title)
+
+        self.cookies_hint = QLabel()
+        self.cookies_hint.setStyleSheet(f"color: {_c('fg_dim')}; font-size: 10px;")
+        self.cookies_hint.setWordWrap(True)
+        layout.addWidget(self.cookies_hint)
+
+        row = QHBoxLayout()
         for k, slot, w in (
             ("cookies_refresh", self._refresh_cookies_view, 130),
             ("cookies_save", self._save_cookies, 130),
             ("cookies_clear", self._clear_cookies, 130),
+            ("cookies_edit", self._open_cookie_editor, 160),
+            ("cookies_sessions", self._open_sessions_dialog, 180),
         ):
             b = QPushButton()
             b.setFixedWidth(w)
             b.clicked.connect(slot)
             self._btns[k] = b
-            crow.addWidget(b)
-        crow.addStretch()
-        rl.addLayout(crow)
+            row.addWidget(b)
+        row.addStretch()
+        layout.addLayout(row)
+
         self.cookies_table = QTableWidget()
         self.cookies_table.setColumnCount(2)
         self.cookies_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.cookies_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.cookies_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        rl.addWidget(self.cookies_table, 1)
-
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        splitter.setSizes([700, 400])
-        layout.addWidget(splitter, 1)
+        layout.addWidget(self.cookies_table, 1)
         return page
 
     def _body_context_menu(self, pos):
@@ -844,6 +1319,7 @@ class HttpClientModule(BaseModule):
                 tr("ctx.title", module="http_client"),
                 tr("ctx.sent", module="http_client", target=module_key))
         except Exception as e:
+            _log(f"send_to failed: {e}")
             QMessageBox.warning(parent_widget(self._widget),
                                 tr("msg.error.title", module="http_client"), str(e))
 
@@ -861,6 +1337,7 @@ class HttpClientModule(BaseModule):
                 tr("ctx.title", module="http_client"),
                 tr("ctx.vault.saved", module="http_client", key=key.strip()))
         except Exception as e:
+            _log(f"vault set failed: {e}")
             QMessageBox.warning(parent_widget(self._widget),
                                 tr("msg.error.title", module="http_client"), str(e))
 
@@ -877,6 +1354,7 @@ class HttpClientModule(BaseModule):
             with open(path, "wb") as f:
                 f.write(self._last_response.get("raw") or b"")
         except Exception as e:
+            _log(f"save response failed: {e}")
             QMessageBox.warning(parent_widget(self._widget),
                                 tr("msg.error.title", module="http_client"), str(e))
 
@@ -936,8 +1414,16 @@ class HttpClientModule(BaseModule):
                     "use_proxy": self.use_proxy_chk.isChecked(),
                 },
             )
-        except Exception:
-            pass
+        except Exception as e:
+            _log(f"persist options failed: {e}")
+
+    def _send_or_cancel(self):
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.cancel()
+            self.send_btn.setEnabled(False)
+            self.status_label.setText(tr("status.cancelling", module="http_client"))
+            return
+        self._send()
 
     def _send(self):
         url = _resolve_vault_placeholders(self.url_input.text().strip())
@@ -957,6 +1443,16 @@ class HttpClientModule(BaseModule):
         body = _resolve_vault_placeholders(self.body_edit.toPlainText())
         engine = self.engine_box.currentText()
 
+        bad_hdr = _validate_headers(headers)
+        if bad_hdr is not None:
+            k, v = bad_hdr
+            QMessageBox.warning(
+                parent_widget(self._widget),
+                tr("msg.bad_header.title", module="http_client"),
+                tr("msg.bad_header.text", module="http_client",
+                   key=k, value=v[:80]))
+            return
+
         if headers.get("Content-Type", "").lower().startswith("application/json") and body.strip():
             try:
                 json.loads(body)
@@ -975,6 +1471,7 @@ class HttpClientModule(BaseModule):
 
         self._persist_request_options()
         self.send_btn.setEnabled(False)
+        self.send_btn.setText(tr("bottom.sending", module="http_client"))
         self.status_label.setText(tr("status.sending", module="http_client"))
         self.status_label.setStyleSheet(
             f"color: {_c('warning')}; font-size: 12px; font-weight: bold;")
@@ -998,18 +1495,28 @@ class HttpClientModule(BaseModule):
 
     def _on_response(self, data):
         self.send_btn.setEnabled(True)
+        self.send_btn.setText(tr("bottom.send", module="http_client"))
         self.worker = None
 
         if not data.get("ok"):
+            err = data.get("error") or "unknown error"
+            if err == "cancelled":
+                self.status_label.setText(tr("status.cancelled", module="http_client"))
+                self.status_label.setStyleSheet(
+                    f"color: {_c('warning')}; font-size: 12px; font-weight: bold;")
+                return
             self.status_label.setText(tr("status.error", module="http_client",
                                           engine=data.get("engine")))
             self.status_label.setStyleSheet(
                 f"color: {_c('danger')}; font-size: 12px; font-weight: bold;")
-            self.resp_body_edit.setPlainText(f"ERROR:\n{data.get('error')}")
-            self.history.add(
-                module=self.name, method=self.method_box.currentText(),
-                url=self.url_input.text(), headers=self._parse_headers(),
-                body=self.body_edit.toPlainText(), error=data.get("error"))
+            self.resp_body_edit.setPlainText(f"ERROR:\n{err}")
+            try:
+                self.history.add(
+                    module=self.name, method=self.method_box.currentText(),
+                    url=self.url_input.text(), headers=self._parse_headers(),
+                    body=self.body_edit.toPlainText(), error=err)
+            except Exception as e:
+                _log(f"history write failed: {e}")
             self._refresh_history()
             return
 
@@ -1017,10 +1524,14 @@ class HttpClientModule(BaseModule):
         color_ = (_c("success") if 200 <= status < 300
                   else _c("warning") if 300 <= status < 400
                   else _c("danger"))
+        ttfb = data.get("ttfb")
+        timing = f"{data['elapsed']*1000:.0f} ms"
+        if ttfb is not None:
+            timing += f" (TTFB {ttfb*1000:.0f} ms)"
         self.status_label.setText(tr(
             "status.ok", module="http_client",
             code=status, reason=data.get("reason", ""),
-            ms=f"{data['elapsed']*1000:.0f}", engine=data.get("engine", "")))
+            ms=timing, engine=data.get("engine", "")))
         self.status_label.setStyleSheet(
             f"color: {color_}; font-size: 12px; font-weight: bold;")
 
@@ -1060,18 +1571,22 @@ class HttpClientModule(BaseModule):
         self._build_html_tree(body)
         self._last_response = data
 
-        self.history.add(
-            module=self.name,
-            method=self.method_box.currentText(),
-            url=self.url_input.text(),
-            headers=self._parse_headers(),
-            body=self.body_edit.toPlainText(),
-            status=status,
-            response_body=body,
-            elapsed=data["elapsed"],
-        )
+        try:
+            self.history.add(
+                module=self.name,
+                method=self.method_box.currentText(),
+                url=self.url_input.text(),
+                headers=self._parse_headers(),
+                body=self.body_edit.toPlainText(),
+                status=status,
+                response_body=body,
+                elapsed=data["elapsed"],
+            )
+        except Exception as e:
+            _log(f"history write failed: {e}")
         self._refresh_history()
         self._refresh_cookies_view()
+        self._refresh_sessions_label()
 
     def _hex_dump(self, raw, width=16):
         lines = []
@@ -1158,33 +1673,62 @@ class HttpClientModule(BaseModule):
 
     def _refresh_cookies_view(self):
         try:
-            sess = _get_session(self.session_input.text().strip() or "default")
+            sess = _session_store.get_requests(
+                self.session_input.text().strip() or "default")
             items = list(sess.cookies)
             self.cookies_table.setRowCount(len(items))
             for i, c in enumerate(items):
                 self.cookies_table.setItem(i, 0, QTableWidgetItem(c.name))
                 self.cookies_table.setItem(i, 1, QTableWidgetItem(c.value))
+        except Exception as e:
+            _log(f"cookies view failed: {e}")
+
+    def _refresh_sessions_label(self):
+        try:
+            count = len(_session_store.list())
+            self.cookies_title.setText(
+                tr("cookies.title_count", module="http_client", count=count))
         except Exception:
             pass
 
     def _save_cookies(self):
         try:
-            sess = _get_session(self.session_input.text().strip() or "default")
+            sess = _session_store.get_requests(
+                self.session_input.text().strip() or "default")
             self.COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
             with open(self.COOKIES_FILE, "w", encoding="utf-8") as f:
                 json.dump(requests.utils.dict_from_cookiejar(sess.cookies),
                           f, ensure_ascii=False, indent=2)
         except Exception as e:
+            _log(f"save cookies failed: {e}")
             QMessageBox.warning(parent_widget(self._widget),
                                 tr("msg.error.title", module="http_client"), str(e))
 
     def _clear_cookies(self):
         try:
-            sess = _get_session(self.session_input.text().strip() or "default")
+            name = self.session_input.text().strip() or "default"
+            sess = _session_store.get_requests(name)
             sess.cookies.clear()
             self._refresh_cookies_view()
-        except Exception:
-            pass
+        except Exception as e:
+            _log(f"clear cookies failed: {e}")
+
+    def _open_cookie_editor(self):
+        try:
+            name = self.session_input.text().strip() or "default"
+            sess = _session_store.get_requests(name)
+        except Exception as e:
+            _log(f"cookie editor failed: {e}")
+            return
+        dlg = CookieEditorDialog(parent_widget(self._widget), name, sess)
+        if dlg.exec() == QDialog.Accepted:
+            self._refresh_cookies_view()
+
+    def _open_sessions_dialog(self):
+        dlg = SessionsDialog(parent_widget(self._widget))
+        dlg.exec()
+        self._refresh_sessions_label()
+        self._refresh_cookies_view()
 
     def _selected_history_row_id(self):
         sel = self.history_table.selectionModel().selectedRows()
@@ -1230,7 +1774,7 @@ class HttpClientModule(BaseModule):
             if curl:
                 QGuiApplication.clipboard().setText(curl)
         except KeyError:
-            pass
+            _log("http.curl.build unavailable")
 
     def _clear_history(self):
         if QMessageBox.question(
@@ -1344,7 +1888,8 @@ class HttpClientModule(BaseModule):
             try:
                 with open(self.SNIPPETS_FILE, "r", encoding="utf-8") as f:
                     snippets = json.load(f)
-            except Exception:
+            except Exception as e:
+                _log(f"snippets read failed: {e}")
                 snippets = []
         self._snippets = snippets
         self.snippet_box.blockSignals(True)

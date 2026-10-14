@@ -12,3 +12,6 @@ werkzeug
 pyotp
 scapy
 dnspython
+websockets
+websocket-client
+PyYAML

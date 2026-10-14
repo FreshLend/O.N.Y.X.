@@ -4,7 +4,7 @@
   "author": "FreshGame",
   "description": "Keep a list of proxies, check them and pick the active one.",
   "icon": "🌐",
-  "icon_name": null,
+  "icon_name": "proxy",
   "dependencies": {
     "http_client": ">=1.0.0"
   },

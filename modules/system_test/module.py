@@ -19,7 +19,9 @@ from core.utils import color as _c, parent_widget
 from styles import loader as theme_loader
 
 from .proxy_server import TestProxy
-from .test_server import TestServer, JWT_SECRET, TOTP_SECRET
+from .test_server import (
+    TestServer, WSTestServer, JWT_SECRET, TOTP_SECRET, HAS_WEBSOCKETS,
+)
 
 try:
     import pyotp
@@ -48,6 +50,7 @@ class SystemTestModule(BaseModule):
         self._details = {}
         self._proxy = TestProxy()
         self._server = TestServer()
+        self._ws_server = WSTestServer()
         self._session_id = None
         self._labels = {}
         self._buttons = {}
@@ -59,6 +62,10 @@ class SystemTestModule(BaseModule):
             pass
         try:
             self._server.stop()
+        except Exception:
+            pass
+        try:
+            self._ws_server.stop()
         except Exception:
             pass
 
@@ -186,6 +193,7 @@ class SystemTestModule(BaseModule):
 
         self._session_id = "st-" + uuid.uuid4().hex[:8]
         self._proxy.stop()
+        self._ws_server.stop()
         self._steps = self._build_steps()
         self._idx = 0
         self._results = []
@@ -237,6 +245,7 @@ class SystemTestModule(BaseModule):
     def _finish(self):
         self._proxy.stop()
         self._server.stop()
+        self._ws_server.stop()
         self.base_url.clear()
         self.run_btn.setEnabled(True)
         self._refresh_progress_text()
@@ -275,12 +284,16 @@ class SystemTestModule(BaseModule):
         proxy = self._proxy
         http = self._http
         session = self._session_id
+        ws_server = self._ws_server
+        module_self = self
 
         state = {
             "token_saved": False,
             "form_token_saved": False,
             "totp_token_saved": False,
             "manual_token_saved": False,
+            "ws_echo_id": None,
+            "ws_headers_id": None,
         }
 
         def _require(*services):
@@ -305,6 +318,179 @@ class SystemTestModule(BaseModule):
         def s_proxy_start():
             ok = proxy.start()
             return ok, f"proxy at {proxy.url}" if ok else "failed"
+
+        def s_ws_server_start():
+            if not HAS_WEBSOCKETS:
+                return True, "skipped (websockets not installed)"
+            _require("ws.available")
+            if not bus.call("ws.available"):
+                return True, "skipped (websocket-client not installed)"
+            ok = ws_server.start()
+            if not ok:
+                return False, "failed to start ws test server"
+            return True, f"ws server at {ws_server.url}"
+
+        def s_ws_services():
+            _require("ws.connect", "ws.send", "ws.close", "ws.ping",
+                     "ws.list", "ws.available",
+                     "ws.wait_connected", "ws.exchange", "ws.recent")
+            services = bus.list_services()
+            missing = [s for s in (
+                "ws.connect", "ws.send", "ws.close", "ws.ping",
+                "ws.list", "ws.available",
+                "ws.wait_connected", "ws.exchange", "ws.recent",
+            ) if s not in services]
+            if missing:
+                return False, f"missing ws services: {missing}"
+            return True, "all ws services registered"
+
+        def s_ws_connect_echo():
+            _require("ws.connect", "ws.wait_connected")
+            if not ws_server.port:
+                raise _Skip(["ws test server"])
+            r = bus.call("ws.connect", ws_server.url + "/echo")
+            if not r.get("ok"):
+                return False, str(r.get("error"))
+            cid = r["connection_id"]
+            ok = bus.call("ws.wait_connected", cid, 5)
+            if not ok:
+                return False, f"not connected within timeout (id={cid})"
+            state["ws_echo_id"] = cid
+            return True, f"connected id={cid}"
+
+        def s_ws_send_text():
+            _require("ws.exchange")
+            cid = state.get("ws_echo_id")
+            if not cid:
+                raise _Skip(["ws echo connection"])
+            r = bus.call("ws.exchange", cid, "hello-ws", timeout=5)
+            if not r.get("ok"):
+                return False, str(r.get("error"))
+            text = r.get("text") or ""
+            ok = text == "TXT:hello-ws"
+            return ok, f"reply={text!r}"
+
+        def s_ws_send_binary():
+            _require("ws.exchange")
+            cid = state.get("ws_echo_id")
+            if not cid:
+                raise _Skip(["ws echo connection"])
+            r = bus.call("ws.exchange", cid, b"\x01\x02\x03", binary=True, timeout=5)
+            if not r.get("ok"):
+                return False, str(r.get("error"))
+            data = r.get("binary_data") or b""
+            ok = data == b"BIN:\x01\x02\x03"
+            return ok, f"binary reply size={len(data)} head={data[:8].hex()}"
+
+        def s_ws_headers_roundtrip():
+            _require("ws.connect", "ws.wait_connected", "ws.exchange")
+            if not ws_server.port:
+                raise _Skip(["ws test server"])
+            hdrs = {"X-Onyx-Test": "yes-please", "User-Agent": "O.N.Y.X./test"}
+            r = bus.call("ws.connect", ws_server.url + "/headers",
+                         headers=hdrs)
+            if not r.get("ok"):
+                return False, str(r.get("error"))
+            cid = r["connection_id"]
+            if not bus.call("ws.wait_connected", cid, 5):
+                return False, "not connected"
+            ex = bus.call("ws.exchange", cid, "ping-headers", timeout=5)
+            if not ex.get("ok"):
+                bus.call("ws.close", cid)
+                return False, str(ex.get("error"))
+            try:
+                echoed = json.loads(ex.get("text") or "{}")
+            except Exception:
+                bus.call("ws.close", cid)
+                return False, "server did not return json headers"
+            ok = (echoed.get("X-Onyx-Test") == "yes-please"
+                  or echoed.get("x-onyx-test") == "yes-please")
+            bus.call("ws.close", cid)
+            return ok, f"echoed keys={list(echoed.keys())[:5]}"
+
+        def s_ws_multi_messages():
+            _require("ws.connect", "ws.wait_connected", "ws.exchange")
+            if not ws_server.port:
+                raise _Skip(["ws test server"])
+            r = bus.call("ws.connect", ws_server.url + "/slow")
+            if not r.get("ok"):
+                return False, str(r.get("error"))
+            cid = r["connection_id"]
+            if not bus.call("ws.wait_connected", cid, 5):
+                return False, "not connected"
+            time.sleep(0.7)
+            msgs = bus.call("ws.recent", cid, 50)
+            incoming = [m for m in msgs
+                        if m.get("direction") == "in" and m.get("opcode") == "text"]
+            texts = [m.get("text") for m in incoming]
+            ok = (len(texts) == 5
+                  and texts[0] == "msg-0"
+                  and texts[-1] == "msg-4")
+            bus.call("ws.close", cid)
+            return ok, f"received {len(texts)} msgs: {texts[:3]}..."
+
+        def s_ws_ping():
+            _require("ws.connect", "ws.wait_connected", "ws.ping")
+            cid = state.get("ws_echo_id")
+            if not cid:
+                raise _Skip(["ws echo connection"])
+            conns = bus.call("ws.list")
+            match = [c for c in conns if c["id"] == cid]
+            if not match or match[0]["state"] != "connected":
+                raise _Skip(["ws echo connection (closed)"])
+            ok = bus.call("ws.ping", cid)
+            time.sleep(0.2)
+            return bool(ok), f"ping sent={ok}"
+
+        def s_ws_accept_close():
+            _require("ws.connect", "ws.wait_connected")
+            if not ws_server.port:
+                raise _Skip(["ws test server"])
+            r = bus.call("ws.connect", ws_server.url + "/reject")
+            if not r.get("ok"):
+                return False, str(r.get("error"))
+            cid = r["connection_id"]
+            deadline = time.time() + 5
+            closed = False
+            while time.time() < deadline:
+                conns = bus.call("ws.list")
+                match = [c for c in conns if c["id"] == cid]
+                if match and match[0]["state"] == "closed":
+                    closed = True
+                    break
+                time.sleep(0.1)
+            return closed, f"server-initiated close handled={closed}"
+
+        def s_ws_close_echo():
+            _require("ws.close", "ws.list")
+            cid = state.get("ws_echo_id")
+            if not cid:
+                raise _Skip(["ws echo connection"])
+            ok = bus.call("ws.close", cid)
+            time.sleep(0.4)
+            conns = bus.call("ws.list")
+            match = [c for c in conns if c["id"] == cid]
+            closed = (not match) or match[0]["state"] == "closed"
+            state["ws_echo_id"] = None
+            return ok and closed, f"closed={closed}"
+
+        def s_ws_bad_url():
+            _require("ws.connect")
+            r = bus.call("ws.connect", "ws://127.0.0.1:1/nope")
+            if not r.get("ok"):
+                return True, "connect() rejected bad url"
+            cid = r["connection_id"]
+            deadline = time.time() + 5
+            got_error = False
+            while time.time() < deadline:
+                conns = bus.call("ws.list")
+                match = [c for c in conns if c["id"] == cid]
+                if match and match[0]["state"] == "closed":
+                    got_error = True
+                    break
+                time.sleep(0.1)
+            bus.call("ws.close", cid)
+            return got_error, "connection to dead port failed as expected"
 
         def s_bus():
             modules = bus.list_modules()
@@ -423,16 +609,24 @@ class SystemTestModule(BaseModule):
             engines = bus.call("http.engines")
             if "curl_cffi" not in engines:
                 return True, "skipped (not installed)"
-            r = http("GET", f"{url}/api/health", headers={}, body="", engine="curl_cffi")
-            return r.get("ok") and r["status"] == 200, "engine=curl_cffi"
+            r = http("GET", f"{url}/api/health", headers={}, body="",
+                     engine="curl_cffi")
+            if not r.get("ok"):
+                return False, f"engine=curl_cffi error={r.get('error')}"
+            ok = r.get("status") == 200
+            return ok, f"engine=curl_cffi status={r.get('status')}"
 
         def s_engine_cloudscraper():
             _require("http.engines", "http.request")
             engines = bus.call("http.engines")
             if "cloudscraper" not in engines:
                 return True, "skipped (not installed)"
-            r = http("GET", f"{url}/api/health", headers={}, body="", engine="cloudscraper")
-            return r.get("ok") and r["status"] == 200, "engine=cloudscraper"
+            r = http("GET", f"{url}/api/health", headers={}, body="",
+                     engine="cloudscraper")
+            if not r.get("ok"):
+                return False, f"engine=cloudscraper error={r.get('error')}"
+            ok = r.get("status") == 200
+            return ok, f"engine=cloudscraper status={r.get('status')}"
 
         def s_curl_parse():
             _require("http.curl.parse")
@@ -546,7 +740,7 @@ class SystemTestModule(BaseModule):
             _require("login.run", "vault.set", "vault.get")
             r = bus.call("login.run", f"{url}/api/login", user, pwd,
                          "JSON body", "token", "test.jwt",
-                         caller=self.CALLER, session=session)
+                         caller=module_self.CALLER, session=session)
             if r is None:
                 return False, "login.run returned None"
             if not r.get("ok"):
@@ -558,7 +752,7 @@ class SystemTestModule(BaseModule):
             _require("login.run", "vault.set", "vault.get")
             r = bus.call("login.run", f"{url}/api/login/form", user, pwd,
                          "Form data", "token", "test.form.jwt",
-                         caller=self.CALLER, session=session)
+                         caller=module_self.CALLER, session=session)
             if r is None:
                 return False, "login.run returned None"
             if not r.get("ok"):
@@ -609,7 +803,7 @@ class SystemTestModule(BaseModule):
             r = bus.call("login.run", f"{url}/api/login", "admin_2fa", "admin123",
                          "JSON body", "token", "test.2fa.totp",
                          totp_secret=TOTP_SECRET,
-                         caller=self.CALLER, session=session)
+                         caller=module_self.CALLER, session=session)
             if not r or not r.get("ok"):
                 return False, str((r or {}).get("error"))
             if not r.get("two_factor_used"):
@@ -628,7 +822,7 @@ class SystemTestModule(BaseModule):
             r = bus.call("login.run", f"{url}/api/login", "admin_2fa", "admin123",
                          "JSON body", "token", "test.2fa.manual",
                          code=code,
-                         caller=self.CALLER, session=session)
+                         caller=module_self.CALLER, session=session)
             if not r or not r.get("ok"):
                 return False, str((r or {}).get("error"))
             return True, f"steps={r.get('steps')} code={code[:2]}***"
@@ -638,7 +832,7 @@ class SystemTestModule(BaseModule):
             bus.call("vault.delete", "test.2fa.missing")
             r = bus.call("login.run", f"{url}/api/login", "admin_2fa", "admin123",
                          "JSON body", "token", "test.2fa.missing",
-                         caller=self.CALLER, session=session)
+                         caller=module_self.CALLER, session=session)
             ok = bool(r and r.get("requires_2fa") and r.get("challenge"))
             return ok, f"requires_2fa={r.get('requires_2fa') if r else None}"
 
@@ -647,7 +841,7 @@ class SystemTestModule(BaseModule):
             r = bus.call("login.run", f"{url}/api/login", "admin_2fa", "admin123",
                          "JSON body", "token", "test.2fa.bad",
                          code="000000",
-                         caller=self.CALLER, session=session)
+                         caller=module_self.CALLER, session=session)
             ok = bool(r) and not r.get("ok")
             err = (r or {}).get("error", "None")
             return ok, f"rejected={ok} err={err[:60]}"
@@ -751,7 +945,7 @@ class SystemTestModule(BaseModule):
             results = bus.call("scanner.scan", url,
                                ["admin", "secret", "uploads", "robots.txt", "api"],
                                threads=5, timeout=5,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             if results is None:
                 return False, "scanner.scan returned None"
             found_urls = [r["url"] for r in results]
@@ -762,7 +956,7 @@ class SystemTestModule(BaseModule):
             _require("scanner.scan")
             results = bus.call("scanner.scan", url, ["uploads"],
                                threads=1, timeout=5,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             if results is None:
                 return False, "scanner.scan returned None"
             return len(results) == 1, f"found={len(results)}"
@@ -798,7 +992,7 @@ class SystemTestModule(BaseModule):
 
         def s_history_caller():
             from core.history import get_history
-            rows = get_history().list(module=self.CALLER, limit=5)
+            rows = get_history().list(module=module_self.CALLER, limit=5)
             if not rows:
                 return True, "skipped (no rows for this caller)"
             return len(rows) > 0, f"caller records={len(rows)}"
@@ -843,7 +1037,7 @@ class SystemTestModule(BaseModule):
             _require("collections.run", "http.request")
             name = "__sys_coll_basic__"
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             if len(results) != 1:
                 return False, f"expected 1, got {len(results)}"
             r = results[0]
@@ -875,7 +1069,7 @@ class SystemTestModule(BaseModule):
             bus.call("collections.save", name, reqs,
                      vars={"base_url": url})
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if not results:
                 return False, "no results"
@@ -903,7 +1097,7 @@ class SystemTestModule(BaseModule):
                      },
                      active_env="prod")
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if not results:
                 return False, "no results"
@@ -925,7 +1119,7 @@ class SystemTestModule(BaseModule):
             }]
             bus.call("collections.save", name, reqs)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if not results:
                 return False, "no results"
@@ -947,7 +1141,7 @@ class SystemTestModule(BaseModule):
             }]
             bus.call("collections.save", name, reqs)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if not results:
                 return False, "no results"
@@ -971,7 +1165,7 @@ class SystemTestModule(BaseModule):
             }]
             bus.call("collections.save", name, reqs)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if not results:
                 return False, "no results"
@@ -993,7 +1187,7 @@ class SystemTestModule(BaseModule):
             }]
             bus.call("collections.save", name, reqs)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if not results:
                 return False, "no results"
@@ -1015,7 +1209,7 @@ class SystemTestModule(BaseModule):
             }]
             bus.call("collections.save", name, reqs)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if not results:
                 return False, "no results"
@@ -1049,7 +1243,7 @@ class SystemTestModule(BaseModule):
             ]
             bus.call("collections.save", name, reqs)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if len(results) != 2:
                 return False, f"expected 2, got {len(results)}"
@@ -1076,7 +1270,7 @@ class SystemTestModule(BaseModule):
             }]
             bus.call("collections.save", name, reqs)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if not results:
                 return False, "no results"
@@ -1099,7 +1293,7 @@ class SystemTestModule(BaseModule):
             bus.call("collections.save", name, reqs)
             t0 = time.time()
             bus.call("collections.run", name,
-                     caller=self.CALLER, session=session)
+                     caller=module_self.CALLER, session=session)
             elapsed = time.time() - t0
             bus.call("collections.delete", name)
             return elapsed >= 0.45, f"elapsed={elapsed*1000:.0f} ms (expect >= 450)"
@@ -1130,7 +1324,7 @@ class SystemTestModule(BaseModule):
             ]
             bus.call("collections.save", name, reqs)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if len(results) != 2:
                 return False, f"expected 2, got {len(results)}"
@@ -1163,7 +1357,7 @@ class SystemTestModule(BaseModule):
             ]
             bus.call("collections.save", name, reqs)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if len(results) != 2:
                 return False, f"expected 2, got {len(results)}"
@@ -1196,7 +1390,7 @@ class SystemTestModule(BaseModule):
             ]
             bus.call("collections.save", name, reqs, stop_on_error=True)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             if len(results) != 2:
                 return False, f"expected 2, got {len(results)}"
@@ -1222,7 +1416,7 @@ class SystemTestModule(BaseModule):
             bus.call("collections.save", name, reqs, parallel=True)
             t0 = time.time()
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             elapsed = time.time() - t0
             bus.call("collections.delete", name)
             if len(results) != 5:
@@ -1263,7 +1457,7 @@ class SystemTestModule(BaseModule):
             }]
             bus.call("collections.save", name, reqs, auth=auth_cfg)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             bus.call("vault.delete", "onyx_reauth_token")
 
@@ -1312,7 +1506,7 @@ class SystemTestModule(BaseModule):
             }]
             bus.call("collections.save", name, reqs, auth=auth_cfg)
             results = bus.call("collections.run", name,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             bus.call("collections.delete", name)
             bus.call("vault.delete", "onyx_reauth_2fa_token")
 
@@ -1444,7 +1638,7 @@ class SystemTestModule(BaseModule):
                                [80, 443, 8080, 8888],
                                threads=4, timeout=1.0,
                                do_banner=True,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             if results is None:
                 return False, "returned None"
             has_service_field = all("service" in r for r in results)
@@ -1456,7 +1650,7 @@ class SystemTestModule(BaseModule):
                                [22, 80, 443, 8080],
                                threads=10, timeout=0.5,
                                do_banner=False,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             if results is None:
                 return False, "returned None"
             for r in results:
@@ -1475,7 +1669,7 @@ class SystemTestModule(BaseModule):
                                [22, 80, 443, 8080],
                                threads=4, timeout=1.0,
                                scan_mode="syn", do_os_fp=True,
-                               caller=self.CALLER, session=session)
+                               caller=module_self.CALLER, session=session)
             if results is None:
                 return False, "returned None"
             return True, f"syn scan, results={len(results)}"
@@ -1638,4 +1832,15 @@ class SystemTestModule(BaseModule):
             ("DNS localhost reverse", s_dns_localhost_reverse),
             ("DNS nxdomain", s_dns_nxdomain),
             ("DNS real lookup (conditional)", s_dns_real_lookup),
+            ("WS server start", s_ws_server_start),
+            ("WS services registered", s_ws_services),
+            ("WS connect echo", s_ws_connect_echo),
+            ("WS send text echo", s_ws_send_text),
+            ("WS send binary echo", s_ws_send_binary),
+            ("WS headers roundtrip", s_ws_headers_roundtrip),
+            ("WS multi messages", s_ws_multi_messages),
+            ("WS ping", s_ws_ping),
+            ("WS server-initiated close", s_ws_accept_close),
+            ("WS close client", s_ws_close_echo),
+            ("WS reject bad url", s_ws_bad_url),
         ]

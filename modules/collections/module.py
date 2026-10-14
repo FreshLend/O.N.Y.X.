@@ -138,27 +138,35 @@ class DataDrivenRunWorker(QThread):
     def run(self):
         results = []
         reqs = self._coll.get("requests") or []
+        session_name = self._owner._session_name(self._name)
         total = len(self._rows) * max(1, len(reqs))
         idx = 0
-        for row in self._rows:
-            vars_map = dict(self._owner._resolve_vars(self._name))
-            for k, v in row.items():
-                vars_map[str(k)] = v
-            for req in reqs:
-                idx += 1
-                try:
-                    res = self._owner._execute_one(
-                        req, None, vars_map, self._caller,
-                        self._session, self._coll.get("auth") or {})
-                except Exception as e:
-                    res = {"name": req.get("name"), "url": req.get("url"),
-                           "ok": False, "assert_ok": False, "error": str(e)}
-                res["_row"] = row
-                results.append(res)
-                try:
-                    self.step.emit(idx - 1, total, res)
-                except RuntimeError:
-                    pass
+        try:
+            for row in self._rows:
+                vars_map = dict(self._owner._resolve_vars(self._name))
+                for k, v in row.items():
+                    vars_map[str(k)] = v
+                for req in reqs:
+                    idx += 1
+                    try:
+                        res = self._owner._execute_one(
+                            req, None, vars_map, self._caller,
+                            self._session, self._coll.get("auth") or {},
+                            session_name)
+                    except Exception as e:
+                        res = {"name": req.get("name"), "url": req.get("url"),
+                               "ok": False, "assert_ok": False, "error": str(e)}
+                    res["_row"] = row
+                    results.append(res)
+                    try:
+                        self.step.emit(idx - 1, total, res)
+                    except RuntimeError:
+                        pass
+        finally:
+            try:
+                self._owner._close_all_ws()
+            except Exception:
+                pass
         self.done.emit(results, self._session)
 
 
@@ -187,6 +195,8 @@ class CollectionsModule(BaseModule):
         self._log = None
         self._reauth_lock = threading.RLock()
         self._reauth_in_progress = False
+        self._ws_lock = threading.RLock()
+        self._ws_connections = {}
 
     def on_load(self, api):
         self._load_all()
@@ -215,6 +225,18 @@ class CollectionsModule(BaseModule):
         self._runner = None
         self._single = None
         self._datadriven = None
+        self._close_all_ws()
+
+    def _close_all_ws(self):
+        with self._ws_lock:
+            ids = list(self._ws_connections.values())
+            self._ws_connections.clear()
+        bus = get_bus()
+        for cid in ids:
+            try:
+                bus.call("ws.close", cid)
+            except Exception:
+                pass
 
     def _svc_list(self):
         return sorted(self._collections.keys())
@@ -253,6 +275,9 @@ class CollectionsModule(BaseModule):
                 path.unlink()
             except Exception:
                 pass
+        if self._active_name == name:
+            self._active_name = None
+            self._active_idx = -1
         if hasattr(self, "collection_box"):
             self._refresh_collections()
         return existed
@@ -285,6 +310,8 @@ class CollectionsModule(BaseModule):
                     data.setdefault("active_env", "")
                     data.setdefault("stop_on_error", False)
                     data.setdefault("parallel", False)
+                    data.setdefault("parallel_workers", 5)
+                    data.setdefault("session_name", "")
                     data.setdefault("auth", {})
                     self._collections[fname.stem] = data
                 except Exception:
@@ -319,7 +346,8 @@ class CollectionsModule(BaseModule):
                 "vars": {"base_url": "http://127.0.0.1:5000"},
                 "requests": [
                     {
-                        "name": "login", "method": "POST",
+                        "name": "login", "protocol": "http",
+                        "method": "POST",
                         "url": "{{base_url}}/api/login",
                         "headers": "Content-Type: application/json",
                         "body": '{"username":"admin","password":"admin123"}',
@@ -329,7 +357,8 @@ class CollectionsModule(BaseModule):
                         "skip_if_prev_failed": False, "run_if_prev_status": [],
                     },
                     {
-                        "name": "me", "method": "GET",
+                        "name": "me", "protocol": "http",
+                        "method": "GET",
                         "url": "{{base_url}}/api/me",
                         "headers": "Authorization: Bearer {{vault.tpl.jwt}}",
                         "body": "",
@@ -354,10 +383,12 @@ class CollectionsModule(BaseModule):
                     "code_field": "code",
                     "token_path": "token",
                     "vault_key": "collections.auth.token",
+                    "max_reauth": 2,
                 },
                 "requests": [
                     {
-                        "name": "me", "method": "GET",
+                        "name": "me", "protocol": "http",
+                        "method": "GET",
                         "url": "{{base_url}}/api/me",
                         "headers": "Authorization: Bearer {{vault.collections.auth.token}}",
                         "body": "",
@@ -372,7 +403,8 @@ class CollectionsModule(BaseModule):
                 "vars": {"base_url": "http://127.0.0.1:5000"},
                 "requests": [
                     {
-                        "name": "get", "method": "GET",
+                        "name": "get", "protocol": "http",
+                        "method": "GET",
                         "url": "{{base_url}}/api/users",
                         "headers": "", "body": "",
                         "extract": {"path": "", "vault_key": ""},
@@ -382,7 +414,8 @@ class CollectionsModule(BaseModule):
                         "skip_if_prev_failed": False, "run_if_prev_status": [],
                     },
                     {
-                        "name": "post", "method": "POST",
+                        "name": "post", "protocol": "http",
+                        "method": "POST",
                         "url": "{{base_url}}/api/echo",
                         "headers": "Content-Type: application/json",
                         "body": '{"x":1}',
@@ -398,12 +431,32 @@ class CollectionsModule(BaseModule):
                 "vars": {"base_url": "http://127.0.0.1:5000"},
                 "requests": [
                     {
-                        "name": "health", "method": "GET",
+                        "name": "health", "protocol": "http",
+                        "method": "GET",
                         "url": "{{base_url}}/api/health",
                         "headers": "", "body": "",
                         "extract": {"path": "", "vault_key": ""},
                         "assert": {"status": 200, "max_ms": 1000},
                         "delay_ms": 500, "retry": 3, "retry_on": [500, 502, 503],
+                        "skip_if_prev_failed": False, "run_if_prev_status": [],
+                    },
+                ],
+            },
+            "ws-echo": {
+                "vars": {"ws_url": "wss://echo.websocket.events"},
+                "requests": [
+                    {
+                        "name": "ws connect+send", "protocol": "ws",
+                        "method": "WS",
+                        "url": "{{ws_url}}",
+                        "headers": "",
+                        "body": "hello-onyx",
+                        "extract": {"path": "", "vault_key": ""},
+                        "assert": {"status": 101, "body_contains": "hello-onyx",
+                                   "max_ms": 0},
+                        "ws_binary": False, "ws_timeout": 5,
+                        "ws_close": True, "ws_reuse_key": "",
+                        "delay_ms": 0, "retry": 0, "retry_on": [],
                         "skip_if_prev_failed": False, "run_if_prev_status": [],
                     },
                 ],
@@ -617,6 +670,17 @@ class CollectionsModule(BaseModule):
         self._checks["parallel"].stateChanged.connect(self._on_options_changed)
         bar.addWidget(self._checks["parallel"])
 
+        self._labels["workers"] = QLabel()
+        self._labels["workers"].setStyleSheet(f"color: {_c('fg_dim')}; font-size: 11px;")
+        bar.addWidget(self._labels["workers"])
+
+        self.workers_spin = QSpinBox()
+        self.workers_spin.setRange(1, 64)
+        self.workers_spin.setValue(5)
+        self.workers_spin.setFixedWidth(70)
+        self.workers_spin.valueChanged.connect(self._on_workers_changed)
+        bar.addWidget(self.workers_spin)
+
         bar.addStretch()
 
         runs_btn = QPushButton()
@@ -641,19 +705,29 @@ class CollectionsModule(BaseModule):
         self.name_input.setFont(self.mono)
         row.addWidget(self.name_input, 2)
 
+        self._labels["protocol"] = QLabel()
+        self._labels["protocol"].setStyleSheet(f"color: {_c('fg_dim')}; font-size: 11px;")
+        row.addWidget(self._labels["protocol"])
+        self.protocol_box = QComboBox()
+        self.protocol_box.addItem("http", "http")
+        self.protocol_box.addItem("ws", "ws")
+        self.protocol_box.setFixedWidth(80)
+        self.protocol_box.currentIndexChanged.connect(self._on_protocol_changed)
+        row.addWidget(self.protocol_box)
+
         self._labels["method"] = QLabel()
         self._labels["method"].setStyleSheet(f"color: {_c('fg_dim')}; font-size: 11px;")
         row.addWidget(self._labels["method"])
         self.method_box = QComboBox()
         self.method_box.addItems(
-            ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+            ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "WS"])
         self.method_box.setFixedWidth(110)
         row.addWidget(self.method_box)
 
         self._labels["from_curl"] = QLabel()
         self._labels["from_curl"].setStyleSheet(f"color: {_c('fg_dim')}; font-size: 11px;")
         row.addWidget(self._labels["from_curl"])
-
+        
         curl_btn = QPushButton()
         self._buttons["import_curl"] = curl_btn
         curl_btn.setFixedWidth(110)
@@ -685,7 +759,24 @@ class CollectionsModule(BaseModule):
         self.body_edit.setFixedHeight(120)
         outer.addWidget(self.body_edit)
 
+        self._json_hl = JsonHighlighter(self.body_edit.document())
+
         return page
+
+    def _on_protocol_changed(self):
+        is_ws = self.protocol_box.currentData() == "ws"
+        try:
+            if is_ws:
+                self.method_box.setCurrentText("WS")
+                self.method_box.setEnabled(False)
+                self.body_edit.setPlaceholderText(T("field.ws_body.placeholder"))
+            else:
+                if self.method_box.currentText() == "WS":
+                    self.method_box.setCurrentText("GET")
+                self.method_box.setEnabled(True)
+                self.body_edit.setPlaceholderText("")
+        except RuntimeError:
+            return
 
     def _build_assert_tab(self) -> QWidget:
         page = QWidget()
@@ -782,6 +873,29 @@ class CollectionsModule(BaseModule):
 
         outer.addWidget(g3)
 
+        g4 = QGroupBox()
+        self._groups["ws"] = g4
+        form4 = QFormLayout(g4)
+
+        self.ws_binary = QCheckBox()
+        form4.addRow(self.ws_binary)
+
+        self.ws_close = QCheckBox()
+        self.ws_close.setChecked(True)
+        form4.addRow(self.ws_close)
+
+        self.ws_timeout = QSpinBox()
+        self.ws_timeout.setRange(1, 600)
+        self.ws_timeout.setValue(5)
+        self.ws_timeout_label = QLabel()
+        form4.addRow(self.ws_timeout_label, self.ws_timeout)
+
+        self.ws_reuse_key = QLineEdit()
+        self.ws_reuse_key_label = QLabel()
+        form4.addRow(self.ws_reuse_key_label, self.ws_reuse_key)
+
+        outer.addWidget(g4)
+
         outer.addStretch()
         return page
 
@@ -815,6 +929,8 @@ class CollectionsModule(BaseModule):
         self._checks["parallel"].setText(T("parallel"))
         self._checks["skip_prev"].setText(T("opt.skip_prev"))
 
+        self._labels["workers"].setText(T("workers"))
+
         self.search_input.setPlaceholderText(T("search.placeholder"))
 
         self._tabs.setTabText(0, T("tab.request"))
@@ -830,6 +946,7 @@ class CollectionsModule(BaseModule):
         ])
 
         self._labels["name"].setText(T("field.name"))
+        self._labels["protocol"].setText(T("field.protocol"))
         self._labels["method"].setText(T("field.method"))
         self._labels["from_curl"].setText(T("field.from_curl"))
         self._labels["url"].setText(T("field.url"))
@@ -865,6 +982,13 @@ class CollectionsModule(BaseModule):
         self.run_if_prev_label.setText(T("opt.run_if_prev"))
         self.run_if_prev_status.setPlaceholderText(T("opt.run_if_prev.placeholder"))
 
+        self._groups["ws"].setTitle(T("opt.ws_group"))
+        self.ws_binary.setText(T("opt.ws_binary"))
+        self.ws_close.setText(T("opt.ws_close"))
+        self.ws_timeout_label.setText(T("opt.ws_timeout"))
+        self.ws_reuse_key_label.setText(T("opt.ws_reuse_key"))
+        self.ws_reuse_key.setPlaceholderText(T("opt.ws_reuse_key.placeholder"))
+
     def _refresh_collections(self):
         if not hasattr(self, "collection_box"):
             return
@@ -877,39 +1001,68 @@ class CollectionsModule(BaseModule):
             if cur and cur in self._collections:
                 self.collection_box.setCurrentText(cur)
             self.collection_box.blockSignals(False)
-            if self.collection_box.count():
-                self._switch_collection(self.collection_box.currentText())
         except RuntimeError:
             return
 
+        if self.collection_box.count():
+            self._switch_collection(self.collection_box.currentText())
+        else:
+            self._switch_collection(None)
+
     def _switch_collection(self, name):
-        self._active_name = name or None
+        if not name or name not in self._collections:
+            self._active_name = None
+            self._active_idx = -1
+            self._refresh_env_box()
+            self._refresh_list()
+            self._clear_editor()
+            return
+
+        self._active_name = name
         self._active_idx = -1
         self._refresh_env_box()
         self._refresh_list()
         self._load_collection_options()
 
-    def _load_collection_options(self):
+    def _active_coll(self):
         if not self._active_name:
+            return None
+        return self._collections.get(self._active_name)
+
+    def _load_collection_options(self):
+        coll = self._active_coll()
+        if coll is None:
             return
         try:
-            coll = self._collections[self._active_name]
             self._checks["stop_on_error"].blockSignals(True)
             self._checks["parallel"].blockSignals(True)
+            self.workers_spin.blockSignals(True)
             self._checks["stop_on_error"].setChecked(coll.get("stop_on_error", False))
             self._checks["parallel"].setChecked(coll.get("parallel", False))
+            self.workers_spin.setValue(int(coll.get("parallel_workers") or 5))
             self._checks["stop_on_error"].blockSignals(False)
             self._checks["parallel"].blockSignals(False)
+            self.workers_spin.blockSignals(False)
         except RuntimeError:
             return
 
     def _on_options_changed(self):
-        if not self._active_name:
+        coll = self._active_coll()
+        if coll is None:
             return
         try:
-            coll = self._collections[self._active_name]
             coll["stop_on_error"] = self._checks["stop_on_error"].isChecked()
             coll["parallel"] = self._checks["parallel"].isChecked()
+            self._save_collection(self._active_name)
+        except RuntimeError:
+            return
+
+    def _on_workers_changed(self, value):
+        coll = self._active_coll()
+        if coll is None:
+            return
+        try:
+            coll["parallel_workers"] = int(value)
             self._save_collection(self._active_name)
         except RuntimeError:
             return
@@ -928,6 +1081,7 @@ class CollectionsModule(BaseModule):
         self._collections[name] = {
             "requests": [], "vars": {}, "environments": {},
             "active_env": "", "stop_on_error": False, "parallel": False,
+            "parallel_workers": 5, "session_name": "",
             "auth": {},
         }
         self._save_collection(name)
@@ -962,6 +1116,8 @@ class CollectionsModule(BaseModule):
         data.setdefault("active_env", "")
         data.setdefault("stop_on_error", False)
         data.setdefault("parallel", False)
+        data.setdefault("parallel_workers", 5)
+        data.setdefault("session_name", "")
         data.setdefault("auth", {})
         self._collections[coll_name] = data
         self._save_collection(coll_name)
@@ -979,8 +1135,14 @@ class CollectionsModule(BaseModule):
             return
         path = self.STORE / f"{name}.json"
         if path.exists():
-            path.unlink()
+            try:
+                path.unlink()
+            except Exception:
+                pass
         self._collections.pop(name, None)
+        if self._active_name == name:
+            self._active_name = None
+            self._active_idx = -1
         self._refresh_collections()
 
     def _refresh_env_box(self):
@@ -990,8 +1152,8 @@ class CollectionsModule(BaseModule):
             self.env_box.blockSignals(True)
             self.env_box.clear()
             self.env_box.addItem("(none)")
-            if self._active_name:
-                coll = self._collections[self._active_name]
+            coll = self._active_coll()
+            if coll is not None:
                 envs = coll.get("environments", {}) or {}
                 for name in sorted(envs.keys()):
                     self.env_box.addItem(name)
@@ -1004,16 +1166,16 @@ class CollectionsModule(BaseModule):
             return
 
     def _on_env_changed(self, text):
-        if not self._active_name:
+        coll = self._active_coll()
+        if coll is None:
             return
-        coll = self._collections[self._active_name]
         coll["active_env"] = "" if text == "(none)" else text
         self._save_collection(self._active_name)
 
     def _edit_vars(self):
-        if not self._active_name:
+        coll = self._active_coll()
+        if coll is None:
             return
-        coll = self._collections[self._active_name]
 
         text, ok = QInputDialog.getMultiLineText(
             parent_widget(self._widget), T("dialog.vars.title"),
@@ -1021,6 +1183,7 @@ class CollectionsModule(BaseModule):
             json.dumps({
                 "vars": coll.get("vars", {}),
                 "environments": coll.get("environments", {}),
+                "session_name": coll.get("session_name", ""),
             }, ensure_ascii=False, indent=2)
         )
         if not ok:
@@ -1033,13 +1196,15 @@ class CollectionsModule(BaseModule):
             return
         coll["vars"] = parsed.get("vars", {}) or {}
         coll["environments"] = parsed.get("environments", {}) or {}
+        if "session_name" in parsed:
+            coll["session_name"] = parsed.get("session_name") or ""
         self._save_collection(self._active_name)
         self._refresh_env_box()
 
     def _edit_auth(self):
-        if not self._active_name:
+        coll = self._active_coll()
+        if coll is None:
             return
-        coll = self._collections[self._active_name]
         current = coll.get("auth") or {
             "enabled": False,
             "profile": "",
@@ -1055,6 +1220,7 @@ class CollectionsModule(BaseModule):
             "vault_key": "collections.auth.token",
             "method": "",
             "code": "",
+            "max_reauth": 2,
         }
         text, ok = QInputDialog.getMultiLineText(
             parent_widget(self._widget),
@@ -1074,15 +1240,17 @@ class CollectionsModule(BaseModule):
         self._save_collection(self._active_name)
 
     def _filtered_requests(self):
-        if not self._active_name:
+        coll = self._active_coll()
+        if coll is None:
             return []
-        all_reqs = self._collections[self._active_name]["requests"]
+        all_reqs = coll.get("requests") or []
         needle = self.search_input.text().strip().lower() if hasattr(self, "search_input") else ""
         if not needle:
             return list(enumerate(all_reqs))
         out = []
         for i, r in enumerate(all_reqs):
-            hay = " ".join(str(r.get(k, "")) for k in ("name", "url", "method")).lower()
+            hay = " ".join(str(r.get(k, "")) for k in
+                           ("name", "url", "method", "protocol")).lower()
             if needle in hay:
                 out.append((i, r))
         return out
@@ -1094,7 +1262,8 @@ class CollectionsModule(BaseModule):
             self._list.clear()
             for i, req in self._filtered_requests():
                 status_marker = self._status_marker(req)
-                text = (f"{status_marker} [{req.get('method', 'GET')}] "
+                proto = (req.get("protocol") or "http").upper()
+                text = (f"{status_marker} [{proto}] "
                         f"{req.get('name') or req.get('url', '')}")
                 item = QListWidgetItem(text)
                 item.setData(Qt.UserRole, i)
@@ -1124,17 +1293,18 @@ class CollectionsModule(BaseModule):
         return None
 
     def _on_rows_moved(self, *args):
-        if not self._active_name:
+        coll = self._active_coll()
+        if coll is None:
             return
         new_order = []
-        all_reqs = self._collections[self._active_name]["requests"]
+        all_reqs = coll.get("requests") or []
         for i in range(self._list.count()):
             item = self._list.item(i)
             orig_idx = item.data(Qt.UserRole)
             if orig_idx is not None and 0 <= orig_idx < len(all_reqs):
                 new_order.append(all_reqs[orig_idx])
         if len(new_order) == len(all_reqs):
-            self._collections[self._active_name]["requests"] = new_order
+            coll["requests"] = new_order
             self._save_collection(self._active_name)
             self._refresh_list()
 
@@ -1143,28 +1313,43 @@ class CollectionsModule(BaseModule):
             QMessageBox.warning(parent_widget(self._widget),
                                 T("msg.error"), T("msg.select_first"))
             return
+        coll = self._active_coll()
+        if coll is None:
+            QMessageBox.warning(parent_widget(self._widget),
+                                T("msg.error"), T("msg.select_first"))
+            return
         req = self._empty_request()
-        self._collections[self._active_name]["requests"].append(req)
+        coll.setdefault("requests", []).append(req)
         self._save_collection(self._active_name)
         self._refresh_list()
-        self._list.setCurrentRow(
-            len(self._collections[self._active_name]["requests"]) - 1)
+        self._list.setCurrentRow(len(coll["requests"]) - 1)
 
     def _empty_request(self):
         return {
-            "name": "new request", "method": "GET",
+            "name": "new request", "protocol": "http", "method": "GET",
             "url": "", "headers": "", "body": "",
             "extract": {"path": "", "vault_key": ""},
             "assert": {"status": None, "body_contains": "",
                        "json_path": "", "json_equals": "", "max_ms": 0},
             "delay_ms": 0, "retry": 0, "retry_on": [],
             "skip_if_prev_failed": False, "run_if_prev_status": [],
+            "ws_binary": False, "ws_close": True, "ws_timeout": 5,
+            "ws_reuse_key": "",
         }
 
     def _duplicate_request(self):
         if self._active_idx < 0:
             return
-        reqs = self._collections[self._active_name]["requests"]
+        coll = self._active_coll()
+        if coll is None:
+            self._active_idx = -1
+            self._clear_editor()
+            return
+        reqs = coll.get("requests") or []
+        if not (0 <= self._active_idx < len(reqs)):
+            self._active_idx = -1
+            self._clear_editor()
+            return
         copy = json.loads(json.dumps(reqs[self._active_idx]))
         copy["name"] = (copy.get("name") or "") + "_copy"
         reqs.insert(self._active_idx + 1, copy)
@@ -1175,7 +1360,17 @@ class CollectionsModule(BaseModule):
     def _delete_request(self):
         if self._active_idx < 0:
             return
-        del self._collections[self._active_name]["requests"][self._active_idx]
+        coll = self._active_coll()
+        if coll is None:
+            self._active_idx = -1
+            self._clear_editor()
+            return
+        reqs = coll.get("requests") or []
+        if not (0 <= self._active_idx < len(reqs)):
+            self._active_idx = -1
+            self._clear_editor()
+            return
+        del reqs[self._active_idx]
         self._save_collection(self._active_name)
         self._active_idx = -1
         self._refresh_list()
@@ -1186,18 +1381,28 @@ class CollectionsModule(BaseModule):
             self._active_idx = -1
             self._clear_editor()
             return
+        coll = self._active_coll()
+        if coll is None:
+            self._active_idx = -1
+            self._clear_editor()
+            return
         item = self._list.item(row)
         orig_idx = item.data(Qt.UserRole) if item else None
-        if orig_idx is None:
+        reqs = coll.get("requests") or []
+        if orig_idx is None or not (0 <= orig_idx < len(reqs)):
             self._active_idx = -1
             self._clear_editor()
             return
         self._active_idx = orig_idx
-        req = self._collections[self._active_name]["requests"][orig_idx]
+        req = reqs[orig_idx]
         self._load_request_into_editor(req)
 
     def _load_request_into_editor(self, req):
         self.name_input.setText(req.get("name", ""))
+        proto = (req.get("protocol") or "http").lower()
+        idx = self.protocol_box.findData(proto)
+        if idx >= 0:
+            self.protocol_box.setCurrentIndex(idx)
         self.method_box.setCurrentText(req.get("method", "GET"))
         self.url_input.setText(req.get("url", ""))
         self.headers_edit.setPlainText(req.get("headers", ""))
@@ -1219,31 +1424,58 @@ class CollectionsModule(BaseModule):
         self.skip_if_prev_failed.setChecked(bool(req.get("skip_if_prev_failed")))
         self.run_if_prev_status.setText(
             ", ".join(str(x) for x in (req.get("run_if_prev_status") or [])))
+        self.ws_binary.setChecked(bool(req.get("ws_binary")))
+        self.ws_close.setChecked(bool(req.get("ws_close", True)))
+        self.ws_timeout.setValue(int(req.get("ws_timeout") or 5))
+        self.ws_reuse_key.setText(req.get("ws_reuse_key", ""))
+        self._on_protocol_changed()
 
     def _clear_editor(self):
-        self.name_input.clear()
-        self.method_box.setCurrentText("GET")
-        self.url_input.clear()
-        self.headers_edit.clear()
-        self.body_edit.clear()
-        self.extract_path.clear()
-        self.extract_key.clear()
-        self.assert_status.clear()
-        self.assert_body_contains.clear()
-        self.assert_json_path.clear()
-        self.assert_json_equals.clear()
-        self.assert_max_ms.setValue(0)
-        self.delay_ms.setValue(0)
-        self.retry_count.setValue(0)
-        self.retry_on.clear()
-        self.skip_if_prev_failed.setChecked(False)
-        self.run_if_prev_status.clear()
+        try:
+            self.name_input.clear()
+            idx = self.protocol_box.findData("http")
+            if idx >= 0:
+                self.protocol_box.setCurrentIndex(idx)
+            self.method_box.setCurrentText("GET")
+            self.url_input.clear()
+            self.headers_edit.clear()
+            self.body_edit.clear()
+            self.extract_path.clear()
+            self.extract_key.clear()
+            self.assert_status.clear()
+            self.assert_body_contains.clear()
+            self.assert_json_path.clear()
+            self.assert_json_equals.clear()
+            self.assert_max_ms.setValue(0)
+            self.delay_ms.setValue(0)
+            self.retry_count.setValue(0)
+            self.retry_on.clear()
+            self.skip_if_prev_failed.setChecked(False)
+            self.run_if_prev_status.clear()
+            self.ws_binary.setChecked(False)
+            self.ws_close.setChecked(True)
+            self.ws_timeout.setValue(5)
+            self.ws_reuse_key.clear()
+        except RuntimeError:
+            return
+        self._on_protocol_changed()
 
     def _save_current(self):
         if self._active_idx < 0:
             return
-        req = self._collections[self._active_name]["requests"][self._active_idx]
+        coll = self._active_coll()
+        if coll is None:
+            self._active_idx = -1
+            self._clear_editor()
+            return
+        reqs = coll.get("requests") or []
+        if not (0 <= self._active_idx < len(reqs)):
+            self._active_idx = -1
+            self._clear_editor()
+            return
+        req = reqs[self._active_idx]
         req["name"] = self.name_input.text()
+        req["protocol"] = self.protocol_box.currentData() or "http"
         req["method"] = self.method_box.currentText()
         req["url"] = self.url_input.text()
         req["headers"] = self.headers_edit.toPlainText()
@@ -1265,6 +1497,10 @@ class CollectionsModule(BaseModule):
         req["retry_on"] = parse_int_list(self.retry_on.text())
         req["skip_if_prev_failed"] = self.skip_if_prev_failed.isChecked()
         req["run_if_prev_status"] = parse_int_list(self.run_if_prev_status.text())
+        req["ws_binary"] = self.ws_binary.isChecked()
+        req["ws_close"] = self.ws_close.isChecked()
+        req["ws_timeout"] = self.ws_timeout.value()
+        req["ws_reuse_key"] = self.ws_reuse_key.text().strip()
 
         self._save_collection(self._active_name)
         self._refresh_list()
@@ -1286,6 +1522,9 @@ class CollectionsModule(BaseModule):
             QMessageBox.warning(parent_widget(self._widget),
                                 T("msg.error"), "http.curl.parse unavailable")
             return
+        idx = self.protocol_box.findData("http")
+        if idx >= 0:
+            self.protocol_box.setCurrentIndex(idx)
         if parsed.get("method"):
             self.method_box.setCurrentText(parsed["method"].upper())
         if parsed.get("url"):
@@ -1296,9 +1535,9 @@ class CollectionsModule(BaseModule):
             self.body_edit.setPlainText(parsed["body"])
 
     def _run_all(self):
-        if not self._active_name:
+        coll = self._active_coll()
+        if coll is None:
             return
-        coll = self._collections[self._active_name]
         if not coll.get("requests"):
             return
         if self._runner is not None and self._runner.isRunning():
@@ -1331,9 +1570,9 @@ class CollectionsModule(BaseModule):
         self._runner.start()
 
     def _run_datadriven(self):
-        if not self._active_name:
+        coll = self._active_coll()
+        if coll is None:
             return
-        coll = self._collections[self._active_name]
         reqs = coll.get("requests") or []
         if not reqs:
             return
@@ -1466,16 +1705,26 @@ class CollectionsModule(BaseModule):
             return
         if self._single is not None and self._single.isRunning():
             return
-        req = self._collections[self._active_name]["requests"][self._active_idx]
+        coll = self._active_coll()
+        if coll is None:
+            return
+        reqs = coll.get("requests") or []
+        if not (0 <= self._active_idx < len(reqs)):
+            return
+        req = reqs[self._active_idx]
         self._log.clear()
         self._log.appendPlainText(T("run.single", name=req.get("name")))
         vars_map = self._resolve_vars(self._active_name)
-        auth_config = self._collections[self._active_name].get("auth") or {}
+        auth_config = coll.get("auth") or {}
+        session_name = self._session_name(self._active_name)
+        session = "single-" + uuid.uuid4().hex[:6]
 
         self._single = SingleRunWorker(
             self._execute_one, req, vars_map, "Collections",
-            "single-" + uuid.uuid4().hex[:6], auth_config,
+            session, auth_config,
         )
+        self._single._exec_fn = lambda r, p, v, c, s, a: self._execute_one(
+            r, p, v, c, s, a, session_name)
         self._single.done.connect(self._on_single_done)
         self._single.start()
 
@@ -1499,6 +1748,13 @@ class CollectionsModule(BaseModule):
             env_vars = (coll.get("environments", {}) or {}).get(active_env, {}) or {}
             out.update(env_vars)
         return out
+
+    def _session_name(self, collection_name):
+        coll = self._collections.get(collection_name) or {}
+        name = (coll.get("session_name") or "").strip()
+        if name:
+            return name
+        return f"coll:{collection_name}"
 
     def _substitute_all(self, text, vars_map):
         from core.utils import resolve_placeholders
@@ -1565,61 +1821,69 @@ class CollectionsModule(BaseModule):
 
         vars_map = self._resolve_vars(name)
         auth_config = coll.get("auth") or {}
+        session_name = self._session_name(name)
         results = []
 
-        if parallel:
-            idx_map = list(enumerate(requests))
-            with ThreadPoolExecutor(max_workers=5) as ex:
-                futures = {
-                    ex.submit(self._execute_one, req, None, vars_map,
-                              caller, session, auth_config): idx
-                    for idx, req in idx_map
-                }
-                for fut in as_completed(futures):
-                    idx = futures[fut]
-                    try:
-                        res = fut.result()
-                    except Exception as e:
-                        res = {"ok": False, "error": str(e),
-                               "name": requests[idx].get("name"),
-                               "url": requests[idx].get("url"),
-                               "assert_ok": False}
-                    results.append((idx, res))
-                    if on_progress:
-                        on_progress(idx, len(requests), res)
-            results.sort(key=lambda x: x[0])
-            ordered = [r for _, r in results]
-        else:
-            ordered = []
-            prev = None
-            for idx, req in enumerate(requests):
-                if stop_on_error and prev and (
-                        not prev.get("ok")
-                        or not prev.get("assert_ok", True)):
-                    res = {
-                        "name": req.get("name"),
-                        "url": req.get("url"),
-                        "skipped": True,
-                        "ok": False,
-                        "assert_ok": False,
-                        "error": "skipped (stop on error)",
+        try:
+            if parallel:
+                idx_map = list(enumerate(requests))
+                workers = max(1, int(coll.get("parallel_workers") or 5))
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    futures = {
+                        ex.submit(self._execute_one, req, None, vars_map,
+                                  caller, session, auth_config, session_name): idx
+                        for idx, req in idx_map
                     }
+                    for fut in as_completed(futures):
+                        idx = futures[fut]
+                        try:
+                            res = fut.result()
+                        except Exception as e:
+                            res = {"ok": False, "error": str(e),
+                                   "name": requests[idx].get("name"),
+                                   "url": requests[idx].get("url"),
+                                   "assert_ok": False}
+                        results.append((idx, res))
+                        if on_progress:
+                            on_progress(idx, len(requests), res)
+                results.sort(key=lambda x: x[0])
+                ordered = [r for _, r in results]
+            else:
+                ordered = []
+                prev = None
+                for idx, req in enumerate(requests):
+                    if stop_on_error and prev and (
+                            not prev.get("ok")
+                            or not prev.get("assert_ok", True)):
+                        res = {
+                            "name": req.get("name"),
+                            "url": req.get("url"),
+                            "skipped": True,
+                            "ok": False,
+                            "assert_ok": False,
+                            "error": "skipped (stop on error)",
+                        }
+                        ordered.append(res)
+                        if on_progress:
+                            on_progress(idx, len(requests), res)
+                        continue
+
+                    res = self._execute_one(req, prev, vars_map, caller,
+                                             session, auth_config, session_name)
                     ordered.append(res)
+                    prev = res
                     if on_progress:
                         on_progress(idx, len(requests), res)
-                    continue
-
-                res = self._execute_one(req, prev, vars_map, caller,
-                                         session, auth_config)
-                ordered.append(res)
-                prev = res
-                if on_progress:
-                    on_progress(idx, len(requests), res)
+        finally:
+            self._close_all_ws()
 
         return ordered, session
 
     def _execute_one(self, req, prev_result, vars_map, caller, session,
-                     auth_config=None):
+                     auth_config=None, session_name=None):
+        if (req.get("protocol") or "http") == "ws":
+            return self._execute_ws(req, vars_map, caller, session)
+
         name = req.get("name")
         method = req.get("method", "GET")
         url_raw = req.get("url", "")
@@ -1654,8 +1918,10 @@ class CollectionsModule(BaseModule):
         retry_max = int(req.get("retry") or 0)
         retry_on = req.get("retry_on") or []
         auth_enabled = bool(auth_config and auth_config.get("enabled"))
+        max_reauth = int(auth_config.get("max_reauth", 2)) if auth_config else 2
 
         attempt = 0
+        reauth_count = 0
         reauth_done = False
         resp = None
         url = url_raw
@@ -1673,6 +1939,8 @@ class CollectionsModule(BaseModule):
                     kwargs["caller"] = caller
                 if session:
                     kwargs["session"] = session
+                if session_name:
+                    kwargs["session_name"] = session_name
                 resp = get_bus().call("http.request", method, url, **kwargs)
             except KeyError:
                 return {
@@ -1684,7 +1952,8 @@ class CollectionsModule(BaseModule):
                 resp = {"ok": False, "error": str(e)}
 
             if (auth_enabled and resp.get("ok")
-                    and resp.get("status") == 401):
+                    and resp.get("status") == 401
+                    and reauth_count < max_reauth):
                 should_reauth = False
                 with self._reauth_lock:
                     if self._reauth_in_progress:
@@ -1695,6 +1964,7 @@ class CollectionsModule(BaseModule):
                 try:
                     if should_reauth and self._try_reauth(auth_config, caller, session):
                         reauth_done = True
+                        reauth_count += 1
                         attempt = 0
                         continue
                 finally:
@@ -1717,9 +1987,11 @@ class CollectionsModule(BaseModule):
             "error": resp.get("error"),
             "body": resp.get("body"),
             "attempt": attempt,
+            "protocol": "http",
         }
         if reauth_done:
             result["reauthed"] = True
+            result["reauth_count"] = reauth_count
 
         extract = req.get("extract") or {}
         if (extract.get("path") and extract.get("vault_key")
@@ -1738,6 +2010,163 @@ class CollectionsModule(BaseModule):
             req.get("assert") or {}, resp)
         result["assert_ok"] = assert_ok
         result["assert_msg"] = assert_msg
+
+        return result
+
+    def _execute_ws(self, req, vars_map, caller, session):
+        name = req.get("name")
+        url = self._substitute_all(req.get("url", ""), vars_map)
+        headers_text = self._substitute_all(req.get("headers", ""), vars_map)
+        body = self._substitute_all(req.get("body", ""), vars_map)
+        headers = parse_headers(headers_text) if headers_text.strip() else {}
+        binary = bool(req.get("ws_binary"))
+        timeout = float(req.get("ws_timeout") or 5)
+        close_after = bool(req.get("ws_close", True))
+        reuse_key = (req.get("ws_reuse_key") or "").strip()
+
+        bus = get_bus()
+
+        if not bus.has_service("ws.connect"):
+            return {
+                "name": name, "url": url, "method": "WS",
+                "protocol": "ws",
+                "ok": False, "assert_ok": False,
+                "error": "ws.connect unavailable (WebSocket module disabled)",
+            }
+
+        start_time = time.time()
+        conn_id = None
+        if reuse_key:
+            with self._ws_lock:
+                conn_id = self._ws_connections.get(reuse_key)
+
+        if conn_id:
+            conns = bus.call("ws.list")
+            match = [c for c in conns if c["id"] == conn_id]
+            if not match or match[0]["state"] != "connected":
+                with self._ws_lock:
+                    self._ws_connections.pop(reuse_key, None)
+                conn_id = None
+
+        if not conn_id:
+            try:
+                r = bus.call("ws.connect", url, headers=headers,
+                             caller=caller, session=session)
+            except KeyError:
+                return {
+                    "name": name, "url": url, "method": "WS",
+                    "protocol": "ws", "ok": False, "assert_ok": False,
+                    "error": "ws.connect unavailable",
+                }
+            except Exception as e:
+                return {
+                    "name": name, "url": url, "method": "WS",
+                    "protocol": "ws", "ok": False, "assert_ok": False,
+                    "error": str(e),
+                }
+            if not r.get("ok"):
+                return {
+                    "name": name, "url": url, "method": "WS",
+                    "protocol": "ws", "ok": False, "assert_ok": False,
+                    "error": r.get("error") or "ws connect failed",
+                }
+            conn_id = r["connection_id"]
+            if reuse_key:
+                with self._ws_lock:
+                    self._ws_connections[reuse_key] = conn_id
+
+        try:
+            if not bus.call("ws.wait_connected", conn_id, max(2, int(timeout))):
+                if close_after:
+                    try:
+                        bus.call("ws.close", conn_id)
+                    except Exception:
+                        pass
+                if reuse_key:
+                    with self._ws_lock:
+                        self._ws_connections.pop(reuse_key, None)
+                return {
+                    "name": name, "url": url, "method": "WS",
+                    "protocol": "ws", "ok": False, "assert_ok": False,
+                    "error": "ws not connected",
+                }
+        except KeyError:
+            return {
+                "name": name, "url": url, "method": "WS",
+                "protocol": "ws", "ok": False, "assert_ok": False,
+                "error": "ws.wait_connected unavailable",
+            }
+
+        result = {
+            "name": name, "url": url, "method": "WS",
+            "protocol": "ws",
+            "ok": True, "status": 101,
+        }
+
+        if body:
+            try:
+                ex = bus.call("ws.exchange", conn_id, body,
+                              binary=binary, timeout=timeout)
+            except KeyError:
+                result["ok"] = False
+                result["error"] = "ws.exchange unavailable"
+            except Exception as e:
+                result["ok"] = False
+                result["error"] = str(e)
+            else:
+                if not ex.get("ok"):
+                    result["ok"] = False
+                    result["error"] = ex.get("error")
+                else:
+                    if binary:
+                        data = ex.get("binary_data") or b""
+                        try:
+                            text_val = (data.decode("utf-8", errors="replace")
+                                        if isinstance(data, bytes) else str(data))
+                        except Exception:
+                            text_val = ""
+                        result["body"] = text_val
+                    else:
+                        result["body"] = ex.get("text") or ""
+                    result["ws_opcode"] = ex.get("opcode")
+                    result["ws_size"] = ex.get("size", 0)
+        else:
+            result["body"] = ""
+
+        result["elapsed"] = time.time() - start_time
+
+        if close_after:
+            try:
+                bus.call("ws.close", conn_id)
+            except Exception:
+                pass
+            if reuse_key:
+                with self._ws_lock:
+                    self._ws_connections.pop(reuse_key, None)
+
+        if result.get("ok"):
+            assert_ok, assert_msg = self._check_asserts(
+                req.get("assert") or {},
+                {"ok": True, "status": result.get("status"),
+                 "body": result.get("body", ""),
+                 "elapsed": result.get("elapsed")})
+            result["assert_ok"] = assert_ok
+            result["assert_msg"] = assert_msg
+        else:
+            result["assert_ok"] = False
+            result["assert_msg"] = result.get("error") or "ws failed"
+
+        extract = req.get("extract") or {}
+        if (extract.get("path") and extract.get("vault_key")
+                and result.get("ok")):
+            try:
+                parsed = json.loads(result.get("body") or "")
+                val = extract_by_path(parsed, extract["path"])
+                if val is not None:
+                    bus.call("vault.set", extract["vault_key"], str(val))
+                    result["extracted"] = extract["vault_key"]
+            except Exception:
+                pass
 
         return result
 
@@ -1827,6 +2256,7 @@ class CollectionsModule(BaseModule):
                 text.append(f"  {k} = {v}")
             text.append("")
         text.append(f"name: {r.get('name')}")
+        text.append(f"protocol: {r.get('protocol', 'http')}")
         text.append(f"url: {r.get('url')}")
         text.append(f"method: {r.get('method')}")
         text.append(f"status: {r.get('status')}")
@@ -1835,7 +2265,9 @@ class CollectionsModule(BaseModule):
         text.append(f"ok: {r.get('ok')}")
         text.append(f"assert_ok: {r.get('assert_ok')}")
         if r.get("reauthed"):
-            text.append("reauthed: yes")
+            text.append(f"reauthed: yes (count={r.get('reauth_count', 1)})")
+        if r.get("ws_opcode"):
+            text.append(f"ws_opcode: {r.get('ws_opcode')}")
         if r.get("assert_msg"):
             text.append(f"assert_msg: {r.get('assert_msg')}")
         if r.get("error"):
@@ -1944,6 +2376,8 @@ class CollectionsModule(BaseModule):
         name = self.collection_box.currentText()
         if not name:
             return
+        if name not in self._collections:
+            return
         path, _ = QFileDialog.getSaveFileName(
             parent_widget(self._widget), T("dialog.export.title"),
             f"{name}.json", "JSON (*.json)")
@@ -1971,6 +2405,8 @@ class CollectionsModule(BaseModule):
         data.setdefault("active_env", "")
         data.setdefault("stop_on_error", False)
         data.setdefault("parallel", False)
+        data.setdefault("parallel_workers", 5)
+        data.setdefault("session_name", "")
         data.setdefault("auth", {})
         base = Path(path).stem or "imported"
         name = base

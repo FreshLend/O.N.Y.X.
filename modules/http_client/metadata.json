@@ -1,10 +1,10 @@
 {
   "name": "HTTP Client",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "FreshGame",
   "description": "Send HTTP requests with multiple engines, history and HTML inspection.",
   "icon": "🌐",
-  "icon_name": "globe",
+  "icon_name": "http_client",
   "dependencies": {},
   "optional_dependencies": {
     "vault": ">=1.0.0"

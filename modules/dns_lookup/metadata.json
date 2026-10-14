@@ -4,7 +4,7 @@
   "author": "FreshGame",
   "description": "Resolve DNS records: A, AAAA, MX, TXT, NS, CNAME, SOA, SRV, CAA, PTR.",
   "icon": "🌐",
-  "icon_name": null,
+  "icon_name": "dns",
   "dependencies": {},
   "optional_dependencies": {}
 }

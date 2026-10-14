@@ -53,6 +53,15 @@ def cmd_run(args):
     if args.env:
         coll["active_env"] = args.env
 
+    if args.workers is not None:
+        coll["parallel_workers"] = int(args.workers)
+
+    if args.parallel:
+        coll["parallel"] = True
+
+    if args.stop_on_error:
+        coll["stop_on_error"] = True
+
     results, session = m._execute_collection(
         args.name, coll, caller="cli", session=args.session,
         stop_on_error=coll.get("stop_on_error", False),
@@ -69,7 +78,10 @@ def cmd_run(args):
             status = r.get("status", "ERR")
             tag = "OK" if r.get("assert_ok", True) and r.get("ok") else "FAIL"
             name = r.get("name") or r.get("url") or "?"
-            print(f"[{i}/{len(results)}] {name}  {status}  {tag}")
+            proto = (r.get("protocol") or "http").upper()
+            reauth = " (reauth)" if r.get("reauthed") else ""
+            skipped = " [skip]" if r.get("skipped") else ""
+            print(f"[{i}/{len(results)}] [{proto}] {name}  {status}  {tag}{reauth}{skipped}")
         print(f"\nsession={session}  passed={passed}  failed={failed}")
 
     return 0 if failed == 0 else 1
@@ -114,21 +126,27 @@ def cmd_datadriven(args):
         return 2
 
     session = args.session or "cli-dd"
+    session_name = m._session_name(args.name)
+    auth_config = coll.get("auth") or {}
     results = []
-    for row in rows:
-        vars_map = dict(m._resolve_vars(args.name))
-        for k, v in row.items():
-            vars_map[str(k)] = v
-        for req in reqs:
-            try:
-                res = m._execute_one(
-                    req, None, vars_map, "cli", session,
-                    coll.get("auth") or {})
-            except Exception as e:
-                res = {"name": req.get("name"), "url": req.get("url"),
-                       "ok": False, "assert_ok": False, "error": str(e)}
-            res["_row"] = row
-            results.append(res)
+
+    try:
+        for row in rows:
+            vars_map = dict(m._resolve_vars(args.name))
+            for k, v in row.items():
+                vars_map[str(k)] = v
+            for req in reqs:
+                try:
+                    res = m._execute_one(
+                        req, None, vars_map, "cli", session,
+                        auth_config, session_name)
+                except Exception as e:
+                    res = {"name": req.get("name"), "url": req.get("url"),
+                           "ok": False, "assert_ok": False, "error": str(e)}
+                res["_row"] = row
+                results.append(res)
+    finally:
+        m._close_all_ws()
 
     passed = sum(1 for r in results
                  if r.get("ok") and r.get("assert_ok", True))
@@ -142,7 +160,8 @@ def cmd_datadriven(args):
             tag = "OK" if r.get("assert_ok", True) and r.get("ok") else "FAIL"
             name = r.get("name") or r.get("url") or "?"
             row_str = " ".join(f"{k}={v}" for k, v in (r.get("_row") or {}).items())
-            print(f"[{i}/{len(results)}] {name}  {status}  {tag}  [{row_str}]")
+            proto = (r.get("protocol") or "http").upper()
+            print(f"[{i}/{len(results)}] [{proto}] {name}  {status}  {tag}  [{row_str}]")
         print(f"\nsession={session}  passed={passed}  failed={failed}")
 
     return 0 if failed == 0 else 1
@@ -160,6 +179,12 @@ def main():
     p_run.add_argument("--vars", help="JSON object with overrides")
     p_run.add_argument("--env", help="environment name")
     p_run.add_argument("--session", default=None)
+    p_run.add_argument("--workers", type=int, default=None,
+                       help="override parallel_workers")
+    p_run.add_argument("--parallel", action="store_true",
+                       help="force parallel execution")
+    p_run.add_argument("--stop-on-error", action="store_true",
+                       help="stop on first failure")
     p_run.add_argument("--format", choices=("text", "json"), default="text")
     p_run.set_defaults(func=cmd_run)
 

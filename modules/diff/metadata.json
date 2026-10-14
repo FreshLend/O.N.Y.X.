@@ -4,7 +4,7 @@
   "author": "FreshGame",
   "description": "Compare two texts or JSON documents and highlight the differences.",
   "icon": "📊",
-  "icon_name": null,
+  "icon_name": "diff",
   "dependencies": {},
   "optional_dependencies": {}
 }

@@ -2,14 +2,13 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QRect
-from PySide6.QtGui import QFont, QPainter, QColor, QBrush, QPen, QTextDocument
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QPainter, QColor, QBrush, QTextDocument
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QSpinBox,
     QPushButton, QPlainTextEdit, QFileDialog, QCheckBox, QMessageBox,
-    QLineEdit, QSplitter, QTabWidget, QDialog, QListWidget, QListWidgetItem,
-    QInputDialog
+    QLineEdit, QDialog, QListWidget, QListWidgetItem, QInputDialog
 )
 
 from core.base_module import BaseModule

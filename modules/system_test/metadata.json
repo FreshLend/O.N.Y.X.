@@ -4,7 +4,7 @@
   "author": "FreshGame",
   "description": "End-to-end self-check.",
   "icon": "🧪",
-  "icon_name": null,
+  "icon_name": "system_test",
   "dependencies": {},
   "optional_dependencies": {
     "http_client": ">=1.0.0",
@@ -16,6 +16,7 @@
     "scanner": ">=1.0.0",
     "reporter": ">=1.0.0",
     "diff": ">=1.0.0",
-    "collections": ">=1.0.0"
+    "collections": ">=1.0.0",
+    "websocket": ">=1.0.0"
   }
 }

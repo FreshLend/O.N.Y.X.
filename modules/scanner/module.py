@@ -4,7 +4,6 @@ import random
 import string
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QFont, QColor
@@ -78,7 +77,6 @@ class ScanWorker(QThread):
         self.ua_rotate = ua_rotate
         self.follow_redirects = follow_redirects
         self._stop = False
-        self._lock = Lock()
         self._baselines = []
 
     def stop(self):

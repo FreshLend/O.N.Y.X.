@@ -8,9 +8,8 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QFont, QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
-    QPushButton, QListWidget, QListWidgetItem, QSplitter, QAbstractItemView,
-    QComboBox, QMessageBox, QFileDialog, QInputDialog, QTableWidget,
-    QTableWidgetItem, QHeaderView
+    QPushButton, QSplitter, QAbstractItemView, QMessageBox, QFileDialog,
+    QInputDialog, QTableWidget, QTableWidgetItem, QHeaderView
 )
 
 from core.base_module import BaseModule
