@@ -1,6 +1,6 @@
 {
   "name": "HTTP Client",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "FreshGame",
   "description": "Send HTTP requests with multiple engines, history and HTML inspection.",
   "icon": "🌐",

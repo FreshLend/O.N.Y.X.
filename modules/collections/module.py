@@ -197,6 +197,7 @@ class CollectionsModule(BaseModule):
         self._reauth_in_progress = False
         self._ws_lock = threading.RLock()
         self._ws_connections = {}
+        self._runs_lock = threading.Lock()
 
     def on_load(self, api):
         self._load_all()
@@ -325,18 +326,19 @@ class CollectionsModule(BaseModule):
             json.dump(self._collections[name], f, ensure_ascii=False, indent=2)
 
     def _append_run(self, name, info):
-        runs = []
-        if self.RUNS_FILE.exists():
-            try:
-                with open(self.RUNS_FILE, "r", encoding="utf-8") as f:
-                    runs = json.load(f)
-            except Exception:
-                runs = []
-        runs.insert(0, info)
-        runs = runs[:200]
-        self.RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.RUNS_FILE, "w", encoding="utf-8") as f:
-            json.dump(runs, f, ensure_ascii=False, indent=2)
+        with self._runs_lock:
+            runs = []
+            if self.RUNS_FILE.exists():
+                try:
+                    with open(self.RUNS_FILE, "r", encoding="utf-8") as f:
+                        runs = json.load(f)
+                except Exception:
+                    runs = []
+            runs.insert(0, info)
+            runs = runs[:200]
+            self.RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.RUNS_FILE, "w", encoding="utf-8") as f:
+                json.dump(runs, f, ensure_ascii=False, indent=2)
 
     def _ensure_templates(self):
         if self.TEMPLATES_FILE.exists():
@@ -1941,6 +1943,11 @@ class CollectionsModule(BaseModule):
                     kwargs["session"] = session
                 if session_name:
                     kwargs["session_name"] = session_name
+                kwargs["history_override"] = {
+                    "url": url_raw,
+                    "headers": headers_raw,
+                    "body": body_raw,
+                }
                 resp = get_bus().call("http.request", method, url, **kwargs)
             except KeyError:
                 return {
@@ -1948,6 +1955,12 @@ class CollectionsModule(BaseModule):
                     "ok": False, "assert_ok": False,
                     "error": "http.request unavailable",
                 }
+            except TypeError:
+                kwargs.pop("history_override", None)
+                try:
+                    resp = get_bus().call("http.request", method, url, **kwargs)
+                except Exception as e:
+                    resp = {"ok": False, "error": str(e)}
             except Exception as e:
                 resp = {"ok": False, "error": str(e)}
 
@@ -2193,8 +2206,15 @@ class CollectionsModule(BaseModule):
                 val = extract_by_path(parsed, json_path)
                 if val is None:
                     msgs.append(f"json path '{json_path}' not found")
-                elif str(val) != str(json_equals):
-                    msgs.append(f"json {json_path}={val!r} != {json_equals!r}")
+                else:
+                    expected = json_equals
+                    if isinstance(expected, str):
+                        try:
+                            expected = json.loads(expected)
+                        except Exception:
+                            pass
+                    if val != expected and str(val) != str(expected):
+                        msgs.append(f"json {json_path}={val!r} != {json_equals!r}")
             except Exception as e:
                 msgs.append(f"json parse error: {e}")
 

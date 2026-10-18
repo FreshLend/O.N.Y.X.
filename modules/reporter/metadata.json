@@ -1,6 +1,6 @@
 {
   "name": "Reporter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "FreshGame",
   "description": "Build reports from request history and export them.",
   "icon": "📝",

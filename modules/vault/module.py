@@ -3,7 +3,6 @@ import threading
 import time
 from pathlib import Path
 
-
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -27,22 +26,36 @@ ENC_PREFIX = b"ONYX1:"
 SAVE_DEBOUNCE_MS = 500
 
 
+def _detect_key_source():
+    try:
+        import keyring
+        if keyring.get_password(KEYRING_SERVICE, KEYRING_USER):
+            return "keyring"
+    except Exception:
+        pass
+    if KEY_FILE.exists():
+        try:
+            if KEY_FILE.read_bytes():
+                return "file"
+        except Exception:
+            pass
+    return None
+
+
 def _get_or_create_key():
     try:
         import keyring
-        from cryptography.fernet import Fernet
         existing = keyring.get_password(KEYRING_SERVICE, KEYRING_USER)
         if existing:
             return existing.encode()
-        k = Fernet.generate_key()
-        keyring.set_password(KEYRING_SERVICE, KEYRING_USER, k.decode())
-        return k
     except Exception:
         pass
 
     if KEY_FILE.exists():
         try:
-            return KEY_FILE.read_bytes()
+            data = KEY_FILE.read_bytes()
+            if data:
+                return data
         except Exception:
             pass
 
@@ -50,6 +63,14 @@ def _get_or_create_key():
         from cryptography.fernet import Fernet
     except ImportError:
         return b""
+
+    try:
+        import keyring
+        k = Fernet.generate_key()
+        keyring.set_password(KEYRING_SERVICE, KEYRING_USER, k.decode())
+        return k
+    except Exception:
+        pass
 
     k = Fernet.generate_key()
     try:
@@ -64,39 +85,23 @@ def _get_or_create_key():
     return k
 
 
-def _rotate_keyring_key(new_key: bytes):
-    try:
-        import keyring
-        keyring.set_password(KEYRING_SERVICE, KEYRING_USER, new_key.decode())
-        return True
-    except Exception:
-        pass
-    try:
-        KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        KEY_FILE.write_bytes(new_key)
-        try:
-            KEY_FILE.chmod(0o600)
-        except Exception:
-            pass
-        return True
-    except Exception:
-        return False
-
-
 class _Crypto:
     def __init__(self):
         self.fernet = None
         self.available = False
         self.mode = "plaintext"
+        self.key_source = None
         try:
             from cryptography.fernet import Fernet
         except ImportError:
             return
+        self.key_source = _detect_key_source()
         key = _get_or_create_key()
         if not key:
             return
+        if self.key_source is None:
+            self.key_source = _detect_key_source()
         try:
-            from cryptography.fernet import Fernet
             self.fernet = Fernet(key)
             self.available = True
             self.mode = "encrypted"
@@ -126,8 +131,25 @@ class _Crypto:
             from cryptography.fernet import Fernet
         except ImportError:
             return False
-        new_key = Fernet.generate_key()
-        if not _rotate_keyring_key(new_key):
+        if self.key_source == "keyring":
+            try:
+                import keyring
+                new_key = Fernet.generate_key()
+                keyring.set_password(KEYRING_SERVICE, KEYRING_USER, new_key.decode())
+            except Exception:
+                return False
+        elif self.key_source == "file":
+            try:
+                new_key = Fernet.generate_key()
+                KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+                KEY_FILE.write_bytes(new_key)
+                try:
+                    KEY_FILE.chmod(0o600)
+                except Exception:
+                    pass
+            except Exception:
+                return False
+        else:
             return False
         try:
             self.fernet = Fernet(new_key)
@@ -205,12 +227,13 @@ class VaultModule(BaseModule):
         return expired
 
     def _schedule_save(self):
-        self._dirty = True
-        if self._save_timer is None:
-            self._save_timer = threading.Timer(
-                SAVE_DEBOUNCE_MS / 1000.0, self._flush_save)
-            self._save_timer.daemon = True
-            self._save_timer.start()
+        with self._lock:
+            self._dirty = True
+            if self._save_timer is None:
+                self._save_timer = threading.Timer(
+                    SAVE_DEBOUNCE_MS / 1000.0, self._flush_save)
+                self._save_timer.daemon = True
+                self._save_timer.start()
 
     def _flush_save(self):
         with self._lock:
@@ -342,6 +365,7 @@ class VaultModule(BaseModule):
                 "namespaces": namespaces,
                 "with_ttl": ttls,
                 "mode": self._crypto.mode,
+                "key_source": self._crypto.key_source,
                 "file_size": STORE.stat().st_size if STORE.exists() else 0,
             }
 

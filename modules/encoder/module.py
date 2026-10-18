@@ -321,9 +321,7 @@ class EncoderModule(BaseModule):
         return root
 
     def _add_op(self, mode=None):
-        if mode is None:
-            mode = "Base64 encode"
-        if not isinstance(mode, str):
+        if mode is None or not isinstance(mode, str):
             mode = "Base64 encode"
 
         row = QWidget()
@@ -346,6 +344,14 @@ class EncoderModule(BaseModule):
         box.currentTextChanged.connect(lambda _: self._process())
         rl.addWidget(box)
 
+        xor_key = QLineEdit()
+        xor_key.setFont(QFont("Consolas", 10))
+        xor_key.setPlaceholderText("XOR key")
+        xor_key.setFixedWidth(120)
+        xor_key.setVisible(box.currentText() == "XOR hex")
+        xor_key.textChanged.connect(lambda _: self._process())
+        rl.addWidget(xor_key)
+
         up_btn = QPushButton("↑")
         up_btn.setFixedWidth(36)
         up_btn.clicked.connect(lambda: self._move_op(row, -1))
@@ -363,8 +369,14 @@ class EncoderModule(BaseModule):
 
         rl.addStretch()
 
+        def _on_op_change(_):
+            xor_key.setVisible(box.currentText() == "XOR hex")
+            self._process()
+
+        box.currentTextChanged.connect(_on_op_change)
+
         self.pipe_container.addWidget(row)
-        self._rows.append({"widget": row, "box": box, "num": num})
+        self._rows.append({"widget": row, "box": box, "num": num, "xor_key": xor_key})
         self._renumber()
         self._process()
 
@@ -433,25 +445,24 @@ class EncoderModule(BaseModule):
 
     def _process(self):
         src = self.inp.toPlainText()
-        ops = self._current_ops()
-        if not ops:
+        rows = self._rows
+        if not rows:
             self.out.setPlainText(src)
             self.status.setText(tr("status.no_ops", module="encoder"))
             return
 
         cur = src
         applied = []
-        for i, op in enumerate(ops):
+        for i, r in enumerate(rows):
+            op = r["box"].currentText()
             try:
-                xor_key = None
-                if op == "XOR hex":
-                    xor_key, ok = QInputDialog.getText(
-                        parent_widget(self._widget),
-                        tr("xor.title", module="encoder"),
-                        tr("xor.prompt", module="encoder"))
-                    if not ok or not xor_key:
-                        self.status.setText(tr("status.cancelled", module="encoder"))
-                        return
+                xor_key = r["xor_key"].text() if op == "XOR hex" else None
+                if op == "XOR hex" and not xor_key:
+                    self.out.setPlainText("")
+                    self.status.setText(tr("status.error", module="encoder",
+                                            step=i + 1, op=op,
+                                            error="XOR key required"))
+                    return
                 cur = self._transform(op, cur, xor_key)
                 applied.append(op)
             except Exception as e:

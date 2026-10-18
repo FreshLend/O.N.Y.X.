@@ -1,6 +1,6 @@
 APP_BRAND = "SWARM / O.N.Y.X."
 APP_NAME = "O.N.Y.X."
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 APP_EXPANSION = "Orchestrated Network Yield eXtensible"
 APP_TAGLINE = "a modular toolkit for network analysis"
 APP_REPO = "github.com/FreshLend/O.N.Y.X."

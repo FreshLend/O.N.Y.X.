@@ -191,6 +191,24 @@ def _validate_url(url):
     return None
 
 
+def _parse_headers_keep_placeholders(text):
+    out = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def _limit_body(body, limit=65536):
+    s = body or ""
+    if len(s) <= limit:
+        return s
+    return s[:limit] + f"\n...[truncated {len(s) - limit} chars]"
+
+
 def _dispatch_request(*, engine, method, url, headers, body,
                       proxies, timeout, verify, allow_redirects, impersonate,
                       session_name=None, capture_redirects=False):
@@ -363,7 +381,9 @@ class RequestWorker(QThread):
                 self.finished.emit({"ok": False, "error": "cancelled",
                                     "engine": self._kwargs.get("engine")})
                 return
-            result = _dispatch_request(**self._kwargs)
+            kwargs = dict(self._kwargs)
+            kwargs.pop("history_override", None)
+            result = _dispatch_request(**kwargs)
             if self._cancelled:
                 result = {"ok": False, "error": "cancelled",
                           "engine": self._kwargs.get("engine")}
@@ -684,16 +704,17 @@ class HttpClientModule(BaseModule):
                              "http.sessions.clear() -> bool")
 
     def _svc_request(self, method, url, headers=None, body=None,
-                     timeout=30, verify=True, allow_redirects=True,
-                     engine="requests", proxies=None,
-                     session_name=None, caller=None, session=None):
+                    timeout=30, verify=True, allow_redirects=True,
+                    engine="requests", proxies=None,
+                    session_name=None, caller=None, session=None,
+                    history_override=None):
         try:
             result = _dispatch_request(
                 engine=engine, method=method, url=url,
                 headers=headers or {}, body=body or "", proxies=proxies,
                 timeout=timeout, verify=verify, allow_redirects=allow_redirects,
                 impersonate=self.settings.get("http_client", "impersonate",
-                                              default="chrome"),
+                                            default="chrome"),
                 session_name=session_name,
             )
         except Exception as e:
@@ -701,22 +722,34 @@ class HttpClientModule(BaseModule):
             result = {"ok": False, "error": str(e), "engine": engine}
 
         result.pop("raw", None)
+
+        if history_override:
+            hist_url = history_override.get("url", url)
+            hist_headers = history_override.get("headers", headers or {})
+            hist_body = history_override.get("body", body or "")
+            if isinstance(hist_headers, str):
+                hist_headers = _parse_headers_keep_placeholders(hist_headers)
+        else:
+            hist_url = url
+            hist_headers = headers or {}
+            hist_body = body or ""
+
         try:
             mod_label = caller or self.name
             if result.get("ok"):
                 self.history.add(
                     module=mod_label, session=session,
-                    method=method, url=url,
-                    headers=headers or {}, body=body or "",
+                    method=method, url=hist_url,
+                    headers=hist_headers, body=hist_body,
                     status=result.get("status"),
-                    response_body=result.get("body"),
+                    response_body=_limit_body(result.get("body")),
                     elapsed=result.get("elapsed"),
                 )
             else:
                 self.history.add(
                     module=mod_label, session=session,
-                    method=method, url=url,
-                    headers=headers or {}, body=body or "",
+                    method=method, url=hist_url,
+                    headers=hist_headers, body=hist_body,
                     error=result.get("error"),
                 )
         except Exception as e:
@@ -1489,6 +1522,11 @@ class HttpClientModule(BaseModule):
             allow_redirects=self.redirect_chk.isChecked(),
             impersonate=self.settings.get("http_client", "impersonate", default="chrome"),
             session_name=self.session_input.text().strip() or "default",
+            history_override={
+                "url": self.url_input.text(),
+                "headers": _parse_headers_keep_placeholders(self.headers_edit.toPlainText()),
+                "body": self.body_edit.toPlainText(),
+            },
         )
         self.worker.finished.connect(self._on_response)
         self.worker.start()
@@ -1513,8 +1551,10 @@ class HttpClientModule(BaseModule):
             try:
                 self.history.add(
                     module=self.name, method=self.method_box.currentText(),
-                    url=self.url_input.text(), headers=self._parse_headers(),
-                    body=self.body_edit.toPlainText(), error=err)
+                    url=self.url_input.text(),
+                    headers=_parse_headers_keep_placeholders(self.headers_edit.toPlainText()),
+                    body=self.body_edit.toPlainText(),
+                    error=err)
             except Exception as e:
                 _log(f"history write failed: {e}")
             self._refresh_history()
@@ -1576,10 +1616,10 @@ class HttpClientModule(BaseModule):
                 module=self.name,
                 method=self.method_box.currentText(),
                 url=self.url_input.text(),
-                headers=self._parse_headers(),
+                headers=_parse_headers_keep_placeholders(self.headers_edit.toPlainText()),
                 body=self.body_edit.toPlainText(),
                 status=status,
-                response_body=body,
+                response_body=_limit_body(body),
                 elapsed=data["elapsed"],
             )
         except Exception as e:

@@ -213,16 +213,15 @@ class JwtDecoderModule(BaseModule):
                             candidates.append(s)
             except Exception:
                 pass
-        for s in candidates:
+        for idx, s in enumerate(candidates, 1):
             try:
                 pyjwt.decode(token, s, algorithms=[algo])
-                return {"ok": True, "found": True, "secret": s,
-                        "tried": candidates.index(s) + 1}
+                return {"ok": True, "found": True, "secret": s, "tried": idx}
             except pyjwt.InvalidSignatureError:
                 continue
             except pyjwt.ExpiredSignatureError:
                 return {"ok": True, "found": True, "secret": s,
-                        "tried": candidates.index(s) + 1, "expired": True}
+                        "tried": idx, "expired": True}
             except Exception:
                 continue
         return {"ok": True, "found": False, "tried": len(candidates)}

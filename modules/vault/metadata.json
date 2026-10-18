@@ -1,6 +1,6 @@
 {
   "name": "Data Vault",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "FreshGame",
   "description": "Encrypted key-value store shared between modules.",
   "icon": "🔐",

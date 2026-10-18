@@ -1,4 +1,5 @@
 import json
+import html as _html
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -628,6 +629,7 @@ class ReporterModule(BaseModule):
         th_bg = _c("bg3")
         code_bg = _c("bg")
         accent = _c("fg_soft")
+        e = _html.escape
         parts = [
             "<!doctype html><html><head><meta charset='utf-8'>",
             "<title>Report</title>",
@@ -640,14 +642,14 @@ class ReporterModule(BaseModule):
             f"white-space:pre-wrap;border:1px solid {border};}}"
             f"a{{color:{accent}}}</style>",
             "</head><body>",
-            f"<h1>{tr('title', module='reporter')}</h1>",
-            f"<p>{tr('generated', module='reporter', datetime=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}"
-            f" · {tr('records', module='reporter', count=len(records))}</p>",
+            f"<h1>{e(tr('title', module='reporter'))}</h1>",
+            f"<p>{e(tr('generated', module='reporter', datetime=datetime.now().strftime('%Y-%m-%d %H:%M:%S')))}"
+            f" · {e(tr('records', module='reporter', count=len(records)))}</p>",
         ]
         summary = self._summary_md(records)
         parts.append("<ul>")
         for line in summary[1:]:
-            parts.append(f"<li>{line.lstrip('- ')}</li>")
+            parts.append(f"<li>{e(line.lstrip('- '))}</li>")
         parts.append("</ul>")
         parts.append(
             "<table><tr><th>#</th><th>Module</th><th>Session</th>"
@@ -658,20 +660,20 @@ class ReporterModule(BaseModule):
                 "ERR" if r.get("error") else "-")
             time_s = f"{r['elapsed']*1000:.0f} ms" if r.get("elapsed") else "-"
             parts.append(
-                f"<tr><td>{i}</td><td>{r.get('module') or '-'}</td>"
-                f"<td>{r.get('session') or '-'}</td>"
-                f"<td>{r.get('method') or '-'}</td>"
-                f"<td>{r.get('url') or ''}</td>"
-                f"<td>{status}</td><td>{time_s}</td></tr>"
+                f"<tr><td>{i}</td><td>{e(r.get('module') or '-')}</td>"
+                f"<td>{e(r.get('session') or '-')}</td>"
+                f"<td>{e(r.get('method') or '-')}</td>"
+                f"<td>{e(r.get('url') or '')}</td>"
+                f"<td>{e(str(status))}</td><td>{e(time_s)}</td></tr>"
             )
         parts.append("</table>")
         for i, r in enumerate(records, 1):
             parts.append(
-                f"<h3>{i}. [{r.get('module')}] {r.get('method')} {r.get('url')}</h3>")
+                f"<h3>{i}. [{e(r.get('module') or '')}] {e(r.get('method') or '')} {e(r.get('url') or '')}</h3>")
             if r.get("error"):
-                parts.append(f"<p><b>Error:</b> {r['error']}</p>")
+                parts.append(f"<p><b>Error:</b> {e(r['error'])}</p>")
             if r.get("response_body"):
-                parts.append(f"<code>{r['response_body'][:1000]}</code>")
+                parts.append(f"<code>{e(r['response_body'][:1000])}</code>")
         parts.append("</body></html>")
         return "\n".join(parts)
 
@@ -697,8 +699,9 @@ class ReporterModule(BaseModule):
             mx = f"{max(times):.0f}" if times else "-"
             status_str = ", ".join(f"{k}×{v}" for k, v in sorted(statuses.items()))
             safe_url = url.replace("|", "\\|")
+            safe_status = status_str.replace("|", "\\|")
             lines.append(
-                f"| {len(items)} | {method} | {safe_url} | {status_str} | {avg} | {mx} |"
+                f"| {len(items)} | {method} | {safe_url} | {safe_status} | {avg} | {mx} |"
             )
         return "\n".join(lines)
 
@@ -734,6 +737,7 @@ class ReporterModule(BaseModule):
         border = _c("border")
         th_bg = _c("bg3")
         accent = _c("fg_soft")
+        e = _html.escape
         parts = [
             "<!doctype html><html><head><meta charset='utf-8'>",
             "<title>Report</title>",
@@ -743,9 +747,9 @@ class ReporterModule(BaseModule):
             f"td,th{{border:1px solid {border};padding:6px}}"
             f"th{{background:{th_bg};color:{accent};}}</style>",
             "</head><body>",
-            f"<h1>{tr('title.grouped', module='reporter')}</h1>",
-            f"<p>{tr('generated', module='reporter', datetime=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}"
-            f" · {tr('unique', module='reporter', count=len(groups))}</p>",
+            f"<h1>{e(tr('title.grouped', module='reporter'))}</h1>",
+            f"<p>{e(tr('generated', module='reporter', datetime=datetime.now().strftime('%Y-%m-%d %H:%M:%S')))}"
+            f" · {e(tr('unique', module='reporter', count=len(groups)))}</p>",
             "<table><tr><th>Count</th><th>Method</th><th>URL</th>"
             "<th>Statuses</th><th>Avg ms</th><th>Max ms</th></tr>",
         ]
@@ -761,8 +765,9 @@ class ReporterModule(BaseModule):
             mx = f"{max(times):.0f}" if times else "-"
             status_str = ", ".join(f"{k}×{v}" for k, v in sorted(statuses.items()))
             parts.append(
-                f"<tr><td>{len(items)}</td><td>{method}</td>"
-                f"<td>{url}</td><td>{status_str}</td><td>{avg}</td><td>{mx}</td></tr>"
+                f"<tr><td>{len(items)}</td><td>{e(method)}</td>"
+                f"<td>{e(url)}</td><td>{e(status_str)}</td>"
+                f"<td>{e(avg)}</td><td>{e(mx)}</td></tr>"
             )
         parts.append("</table></body></html>")
         return "\n".join(parts)

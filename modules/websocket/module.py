@@ -329,6 +329,7 @@ class WebSocketModule(BaseModule):
             "counter": 0,
             "caller": caller,
             "session": session,
+            "send_lock": threading.Lock(),
         }
         with self._lock:
             self._connections[conn_id] = meta
@@ -358,7 +359,8 @@ class WebSocketModule(BaseModule):
                       else websocket.ABNF.OPCODE_TEXT)
             if binary and isinstance(data, str):
                 data = data.encode("utf-8", errors="replace")
-            app.send(data, opcode=opcode)
+            with meta["send_lock"]:
+                app.send(data, opcode=opcode)
             with self._lock:
                 meta["sent"] = meta.get("sent", 0) + 1
             self._record_message(connection_id, {
@@ -391,7 +393,8 @@ class WebSocketModule(BaseModule):
         if app is None:
             return False
         try:
-            app.send("", opcode=websocket.ABNF.OPCODE_PING)
+            with meta["send_lock"]:
+                app.send("", opcode=websocket.ABNF.OPCODE_PING)
             return True
         except Exception:
             return False
