@@ -5,8 +5,8 @@ from PySide6.QtWidgets import (
 )
 
 from core.brand import (
-    APP_BRAND, APP_NAME, APP_VERSION, APP_EXPANSION,
-    APP_AUTHOR,
+    APP_NAME, APP_VERSION, APP_EXPANSION,
+    APP_AUTHOR, ASCII_LOGO
 )
 from core.utils import color as _c
 from core.i18n import tr
@@ -22,18 +22,12 @@ class AboutDialog(QDialog):
         layout.setContentsMargins(28, 24, 28, 20)
         layout.setSpacing(10)
 
-        ascii_logo = QLabel(
-            "███████╗██╗    ██╗ █████╗ ██████╗ ███╗   ███╗\n"
-            "██╔════╝██║    ██║██╔══██╗██╔══██╗████╗ ████║\n"
-            "███████╗██║ █╗ ██║███████║██████╔╝██╔████╔██║\n"
-            "╚════██║██║███╗██║██╔══██║██╔══██╗██║╚██╔╝██║\n"
-            "███████║╚███╔███╔╝██║  ██║██║  ██║██║ ╚═╝ ██║\n"
-            "╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝"
-        )
-        ascii_logo.setAlignment(Qt.AlignCenter)
-        ascii_logo.setFont(QFont("Consolas", 12))
-        ascii_logo.setStyleSheet(f"color: {_c('fg')}; background: transparent;")
-        layout.addWidget(ascii_logo)
+        if ASCII_LOGO:
+            ascii_logo = QLabel(ASCII_LOGO)
+            ascii_logo.setAlignment(Qt.AlignCenter)
+            ascii_logo.setFont(QFont("Consolas", 10))
+            ascii_logo.setStyleSheet(f"color: {_c('fg')}; background: transparent;")
+            layout.addWidget(ascii_logo)
 
         title = QLabel(APP_NAME)
         title.setAlignment(Qt.AlignCenter)
