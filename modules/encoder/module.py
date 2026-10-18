@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit,
-    QPushButton, QComboBox, QSplitter, QMessageBox, QInputDialog
+    QPushButton, QComboBox, QSplitter, QMessageBox, QLineEdit
 )
 
 from core.base_module import BaseModule
