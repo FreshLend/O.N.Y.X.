@@ -218,4 +218,4 @@ def _on_event(self, name, payload):
 ---
 
 > Orchestrated · Network · Yield · eXtensible  
-> используйте ответственно
+> используйте ответственно · [SECURITY.md](SECURITY.md)
