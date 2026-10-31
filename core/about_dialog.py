@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 
 from core.brand import (
     APP_NAME, APP_VERSION, APP_EXPANSION,
-    APP_AUTHOR, ASCII_LOGO
+    APP_AUTHOR, ASCII_LOGO, APP_EXPANSION_LETTERS
 )
 from core.utils import color as _c
 from core.i18n import tr
@@ -58,15 +58,10 @@ class AboutDialog(QDialog):
         )
         layout.addWidget(expansion_title)
 
-        letters = [
-            ("O", "Orchestrated", "modular, working as one swarm"),
-            ("N", "Network",      "HTTP, proxies, bypass engines"),
-            ("Y", "Yield",        "responses, data, metrics"),
-            ("X", "eXtensible",   "plugins and external modules"),
-        ]
         letters_box = QVBoxLayout()
         letters_box.setSpacing(4)
-        for letter, word, hint in letters:
+        
+        for letter, word, hint in APP_EXPANSION_LETTERS:
             row = QHBoxLayout()
             row.setSpacing(10)
 

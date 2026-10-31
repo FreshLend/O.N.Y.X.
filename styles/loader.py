@@ -1,6 +1,7 @@
 import re
 import json
 import importlib
+import os
 from pathlib import Path
 from string import Template
 from typing import Optional, Dict
@@ -124,10 +125,28 @@ def _emoji_pixmap(emoji: str, size: int) -> QPixmap:
 
 
 def get_icon(*, icon_name: Optional[str] = None,
+             icon_path: Optional[str] = None,
              emoji: Optional[str] = None,
              size: int = 32,
              color: Optional[str] = None) -> QIcon:
+    
     color = color or get_color("fg", "#00ff41")
+
+    if icon_path and os.path.exists(icon_path):
+        if icon_path.lower().endswith(".svg"):
+            try:
+                with open(icon_path, "r", encoding="utf-8") as f:
+                    svg_data = f.read()
+                pix = _svg_pixmap(svg_data, size, color)
+                if pix:
+                    return QIcon(pix)
+            except Exception:
+                pass
+        else:
+            pix = QPixmap(icon_path)
+            if not pix.isNull():
+                pix = pix.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                return QIcon(pix)
 
     if icon_name and icon_name in _active["icons"]:
         pix = _svg_pixmap(_active["icons"][icon_name], size, color)
@@ -142,5 +161,5 @@ def get_icon(*, icon_name: Optional[str] = None,
     return QIcon(pix)
 
 
-def get_pixmap(*, icon_name=None, emoji=None, size=32, color=None) -> QPixmap:
-    return get_icon(icon_name=icon_name, emoji=emoji, size=size, color=color).pixmap(size, size)
+def get_pixmap(*, icon_name=None, icon_path=None, emoji=None, size=32, color=None) -> QPixmap:
+    return get_icon(icon_name=icon_name, icon_path=icon_path, emoji=emoji, size=size, color=color).pixmap(size, size)

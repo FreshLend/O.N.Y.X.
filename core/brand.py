@@ -5,6 +5,14 @@ APP_EXPANSION = "Orchestrated Network Yield eXtensible"
 APP_TAGLINE = "a modular toolkit for network analysis"
 APP_REPO = "github.com/FreshLend/O.N.Y.X."
 APP_AUTHOR = "FreshGame"
+
+APP_EXPANSION_LETTERS = [
+    ("O", "Orchestrated", "modular, working as one swarm"),
+    ("N", "Network", "HTTP, proxies, bypass engines"),
+    ("Y", "Yield", "responses, data, metrics"),
+    ("X", "eXtensible", "plugins and external modules"),
+]
+
 ASCII_LOGO = """\
 ███████╗██╗    ██╗ █████╗ ██████╗ ███╗   ███╗
 ██╔════╝██║    ██║██╔══██╗██╔══██╗████╗ ████║
@@ -12,6 +20,7 @@ ASCII_LOGO = """\
 ╚════██║██║███╗██║██╔══██║██╔══██╗██║╚██╔╝██║
 ███████║╚███╔███╔╝██║  ██║██║  ██║██║ ╚═╝ ██║
 ╚══════╝ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝"""
+
 APP_ICON_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <g stroke="#4a90c7" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
     <path d="M32 7 L53.66 19.5 L53.66 44.5 L32 57 L10.34 44.5 L10.34 19.5 Z"/>

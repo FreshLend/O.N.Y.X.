@@ -8,6 +8,7 @@ class BaseModule:
     description: str = "No description provided."
     icon: str = "?"
     icon_name: Optional[str] = None
+    icon_path: Optional[str] = None
 
     key: str = ""
     version: str = "0.0.0"

@@ -5,8 +5,8 @@ from PySide6.QtGui import QIcon, QPixmap, QPainter
 from PySide6.QtSvg import QSvgRenderer
 
 from core.brand import (
-    APP_BRAND, APP_NAME, APP_VERSION, APP_EXPANSION, APP_REPO, APP_AUTHOR,
-    APP_ICON_SVG, ASCII_LOGO,
+    APP_BRAND, APP_NAME, APP_VERSION, APP_EXPANSION,
+    APP_REPO, APP_AUTHOR, APP_ICON_SVG, ASCII_LOGO
 )
 from core.module_loader import discover_modules
 from core.settings import get_settings

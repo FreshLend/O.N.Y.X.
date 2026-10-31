@@ -12,7 +12,7 @@ from core.module_api import get_bus
 from core.bus_dialog import BusDialog
 from core.about_dialog import AboutDialog
 from core.modules_dialog import ModulesDialog
-from core.brand import APP_NAME, APP_VERSION, APP_BRAND
+from core.brand import APP_NAME, APP_VERSION, APP_BRAND, APP_TAGLINE
 from core.utils import color
 from core.i18n import tr, get_i18n
 from styles import loader as theme_loader
@@ -35,6 +35,7 @@ class ModuleCard(QFrame):
         icon_label = QLabel()
         icon_label.setPixmap(theme_loader.get_pixmap(
             icon_name=getattr(module, "icon_name", None),
+            icon_path=getattr(module, "icon_path", None),
             emoji=getattr(module, "icon", "?"),
             size=36,
         ))
@@ -196,7 +197,11 @@ class MainWindow(QMainWindow):
         scroll.setWidget(content)
         outer.addWidget(scroll, 1)
 
-        footer = QLabel(tr("app.menu.footer"))
+        footer_text = tr("app.menu.footer")
+        if footer_text == "app.menu.footer":
+            footer_text = f"{APP_NAME} // {APP_TAGLINE}"
+            
+        footer = QLabel(footer_text)
         footer.setAlignment(Qt.AlignCenter)
         footer.setStyleSheet(
             f"color: {color('fg_dim')}; font-size: 12px; "
@@ -336,6 +341,7 @@ class MainWindow(QMainWindow):
         icon_label = QLabel()
         icon_label.setPixmap(theme_loader.get_pixmap(
             icon_name=getattr(module, "icon_name", None),
+            icon_path=getattr(module, "icon_path", None),
             emoji=getattr(module, "icon", "?"),
             size=22,
         ))

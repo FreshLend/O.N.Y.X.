@@ -85,11 +85,11 @@ def discover_modules(
     registry = registry or get_registry()
     base_path = Path(modules_dir).resolve()
     if not base_path.exists():
-        emit(f"папка '{modules_dir}' не найдена")
+        emit(f"directory '{modules_dir}' not found")
         return []
 
     specs = scan_specs(base_path)
-    emit(f"найдено модулей: {len(specs)}")
+    emit(f"found modules: {len(specs)}")
 
     order, enabled, blocked = _resolve_load_order(specs, registry)
 
@@ -151,6 +151,14 @@ def discover_modules(
                                       default=spec.description)
             instance.icon = spec.icon
             instance.icon_name = spec.icon_name
+
+            if not getattr(instance, "icon_path", None):
+                for ext in (".svg", ".png", ".jpg", ".webp"):
+                    local_icon = spec.path / f"icon{ext}"
+                    if local_icon.exists():
+                        instance.icon_path = str(local_icon)
+                        break
+
             modules.append(instance)
             loaded_keys.add(key)
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -160,7 +168,7 @@ def discover_modules(
             traceback.print_exc()
 
     t_total = time.time() - start_time
-    emit(f"загружено: {len(modules)}  ({int(t_total * 1000)} ms)")
+    emit(f"loaded: {len(modules)}  ({int(t_total * 1000)} ms)")
     return modules
 
 
