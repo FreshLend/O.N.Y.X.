@@ -1,4 +1,4 @@
-# SWARM / O.N.Y.X. **RU** | [EN](README.EN.md)
+# [SWARM](https://github.com/FreshLend/SWARM) / O.N.Y.X. **RU** | [EN](README.EN.md)
 
 <p align="center">
   <img src="icon.png" alt="O.N.Y.X." width="256">
@@ -15,7 +15,7 @@
 
 ## О проекте
 
-O.N.Y.X. — десктопное приложение, которое объединяет в одной оболочке инструменты, обычно существующие по отдельности: HTTP-клиент, сканер портов и директорий, менеджер прокси, JWT-мастерскую, кодировщик, diff, шифрованное хранилище секретов и систему запуска коллекций запросов. У всех модулей — общий UI, общая история запросов, общий vault и общая шина событий.
+O.N.Y.X. - десктопное приложение, которое объединяет в одной оболочке инструменты, обычно существующие по отдельности: HTTP-клиент, сканер портов и директорий, менеджер прокси, JWT-мастерскую, кодировщик, diff, шифрованное хранилище секретов и систему запуска коллекций запросов.
 
 ---
 
@@ -49,7 +49,7 @@ python main.py
 
 Python 3.10+.
 
-**Windows.** Установить Npcap с https://npcap.com/#download, отметив **Install Npcap in WinPcap API-compatible Mode**.
+**Windows.** Установить Npcap с https://npcap.com/#download, отметив **Install Npcap in WinPCAP API-compatible Mode**.
 
 ---
 
@@ -61,10 +61,11 @@ Python 3.10+.
 ├── requirements.txt
 ├── config/                # runtime: vault, history.db, профили, коллекции
 │
-├── core/                  # ядро
+├── core/                  # ядро SWARM
+│   ├── brand.py           # брендинг (O.N.Y.X.)
 │   ├── main_window.py     # меню и навигация
 │   ├── module_api.py      # шина сервисов и событий
-│   ├── module_loader.py   # загрузка модулей и разрешение зависимостей
+│   ├── module_loader.py   # загрузка модулей, Hot Reload и зависимости
 │   ├── module_spec.py     # чтение metadata.json
 │   ├── module_registry.py # реестр включённых модулей
 │   ├── base_module.py     # базовый класс
@@ -72,11 +73,11 @@ Python 3.10+.
 │   ├── i18n.py            # локализация
 │   ├── settings.py        # настройки
 │   ├── splash.py          # заставка
-│   ├── utils.py           # хелперы
-│   └── *_dialog.py        # диалоги
+│   └── utils.py           # хелперы
 │
 ├── modules/               # модули
 │   ├── http_client/
+│   ├── websocket/
 │   ├── port_scanner/
 │   ├── dns_lookup/
 │   ├── scanner/
@@ -90,12 +91,12 @@ Python 3.10+.
 │   ├── reporter/
 │   └── system_test/
 │
-├── styles/                # темы (matrix, onyx)
-│   ├── loader.py
+├── styles/                # кастомные темы
+│   ├── loader.py          # загрузчик (встроенная тема SWARM)
 │   ├── matrix/
 │   └── onyx/
 │
-└── langs/                 # общие переводы
+└── langs/                 # общие переводы ядра
     ├── en_US.json
     └── ru_RU.json
 ```
@@ -104,13 +105,13 @@ Python 3.10+.
 
 ## Написание модуля
 
-Модуль — папка внутри `modules/`:
+Модуль - папка внутри `modules/`. Благодаря **Hot Reload**, вам не нужно перезапускать всё приложение, чтобы увидеть изменения - просто нажмите «Модули» -> «Применить».
 
 ```
 modules/my_module/
 ├── metadata.json
 ├── module.py
-├── __init__.py
+├── icon.svg               # (опционально) своя иконка
 └── langs/
     ├── en_US.json
     └── ru_RU.json
@@ -124,17 +125,15 @@ modules/my_module/
   "version": "1.0.0",
   "author": "YourName",
   "description": "What this module does.",
-  "icon": "🚀",
-  "dependencies": { "vault": ">=1.0.0" },
-  "optional_dependencies": { "http_client": ">=1.0.0" }
+  "icon_name": "module",
+  "dependencies": { "vault": ">=1.0.0" }
 }
 ```
-
-`dependencies` — модуль не загрузится без них. `optional_dependencies` — не загрузится только он сам, но остальные модули не пострадают. Система выстраивает порядок загрузки автоматически, разрешает цепочки зависимостей и блокирует включение модуля, если его зависимость отключена.
+*Если вы не хотите искать иконку, используйте встроенные (`module`, `play`, `globe`, `settings`, `code`). Либо просто положите файл `icon.svg` в папку модуля - ядро подхватит его автоматически.*
 
 ### module.py
 
-Класс — наследник `BaseModule`. Один экземпляр на всё время работы приложения.
+Класс - наследник `BaseModule`. Один экземпляр на всё время работы приложения.
 
 ```python
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
@@ -143,79 +142,35 @@ from core.i18n import tr
 
 
 class MyModule(BaseModule):
-    def on_load(self, api):
-        pass
-
-    def on_shutdown(self):
-        pass
-
     def create_widget(self) -> QWidget:
         root = QWidget()
         layout = QVBoxLayout(root)
         layout.addWidget(QLabel(tr("hello", module="my_module")))
         return root
-
-    def retranslate(self):
-        pass
 ```
 
 | Метод | Когда вызывается |
 |---|---|
-| `on_load(api)` | при загрузке модуля — регистрация сервисов, подписки на события |
-| `create_widget()` | при первом открытии модуля — возвращает QWidget |
+| `on_load(api)` | при загрузке модуля - регистрация сервисов, подписки на события |
+| `create_widget()` | при первом открытии модуля - возвращает QWidget |
 | `retranslate()` | при смене языка |
 | `on_unload(api)` | при выгрузке модуля |
 | `on_shutdown()` | при закрытии приложения |
 
-Виджет создаётся один раз и кэшируется. Открытие/закрытие модуля не сбрасывает его состояние.
-
-### langs/*.json
-
-```json
-{
-  "name": "My Module",
-  "description": "What this module does.",
-  "hello": "Hello, world!"
-}
-```
-
-Обращение: `tr("hello", module="my_module")`. Если ключа нет в текущей локали — подставляется `en_US`.
-
 ### Взаимодействие с другими модулями
 
-**Регистрация сервиса** — функция становится доступна другим:
-
+**Регистрация сервиса:**
 ```python
-api.register_service(
-    "my_module", "my_module.greet",
-    lambda name: f"Hello, {name}!",
-    "my_module.greet(name) -> str"
-)
+api.register_service("my_module", "my_module.greet", lambda name: f"Hello, {name}!")
 ```
 
-**Вызов чужого сервиса:**
-
+**Вызов чужого сервиса и события:**
 ```python
 token = api.call("vault.get", "my_token")
-
-resp = api.call("http.request", "GET", "https://api.example.com/me",
-                headers={"Authorization": f"Bearer {token}"},
-                body="", timeout=30)
-```
-
-**События** — публикация и подписка:
-
-```python
-api.emit_event("my_module.done", result="ok", count=42)
-
+api.emit_event("my_module.done", result="ok")
 api.event.connect(self._on_event)
-
-def _on_event(self, name, payload):
-    if name == "vault.changed":
-        ...
 ```
 
 ---
-
 > Orchestrated · Network · Yield · eXtensible  
 > используйте ответственно · [SECURITY.md](SECURITY.md)
