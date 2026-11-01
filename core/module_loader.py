@@ -1,4 +1,5 @@
 import importlib
+import sys
 import time
 import traceback
 from pathlib import Path
@@ -112,6 +113,14 @@ def discover_modules(
             continue
 
         import_path = f"{modules_dir}.{key}.module"
+        
+        if import_path in sys.modules:
+            del sys.modules[import_path]
+        
+        for mod_name in list(sys.modules.keys()):
+            if mod_name.startswith(f"{modules_dir}.{key}."):
+                del sys.modules[mod_name]
+
         try:
             mod = importlib.import_module(import_path)
         except Exception as e:
