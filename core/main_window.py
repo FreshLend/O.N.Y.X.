@@ -82,6 +82,8 @@ class MainWindow(QMainWindow):
         self.bus = get_bus()
         self.i18n = get_i18n()
 
+        self.bus.register_service("MainWindow", "core.reload_modules", self._reload_modules, "Reloads all modules and rebuilds the UI")
+
         if modules is None:
             self.modules = discover_modules("modules")
         else:
