@@ -1,8 +1,8 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QStackedWidget, QFrame, QGridLayout, QScrollArea,
-    QSizePolicy, QDialog,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QStackedWidget, QFrame,
+    QGridLayout, QScrollArea, QSizePolicy, QDialog
 )
 
 from core.module_loader import discover_modules
@@ -120,6 +120,7 @@ class MainWindow(QMainWindow):
         banner_layout.setContentsMargins(24, 20, 24, 20)
 
         brand_box = QWidget()
+        brand_box.setStyleSheet("background: transparent;")
         brand_box.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
 
         brand_layout = QVBoxLayout(brand_box)

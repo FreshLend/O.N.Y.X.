@@ -2,9 +2,9 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QPushButton, QAbstractItemView, QMessageBox,
-    QCheckBox, QWidget
+    QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
+    QTableWidgetItem, QHeaderView, QPushButton,
+    QAbstractItemView, QMessageBox, QCheckBox, QWidget
 )
 
 from .module_spec import scan_specs
@@ -90,7 +90,9 @@ class ModulesDialog(QDialog):
             cb.setChecked(self._state.get(key, True))
             cb.stateChanged.connect(
                 lambda s, k=key: self._on_toggle(k, s == Qt.Checked.value))
+            
             wrap = QWidget()
+            wrap.setStyleSheet("background: transparent;")
             wl = QHBoxLayout(wrap)
             wl.setContentsMargins(0, 0, 0, 0)
             wl.addWidget(cb)
