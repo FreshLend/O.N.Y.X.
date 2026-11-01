@@ -272,6 +272,14 @@ class MainWindow(QMainWindow):
     def _on_locale_changed(self, *_):
         self._refresh_module_meta()
 
+        for name in self.bus.list_modules():
+            mod = self.bus.get_module(name)
+            if mod and hasattr(mod, "retranslate"):
+                try:
+                    mod.retranslate()
+                except Exception as e:
+                    print(f"[i18n] retranslate {name}: {e}")
+
         if self._current_module is None:
             new_menu = self._build_menu_screen()
             old_menu = self.stack.widget(0)
@@ -282,13 +290,6 @@ class MainWindow(QMainWindow):
             return
 
         self._rebuild_menu()
-        for name in self.bus.list_modules():
-            mod = self.bus.get_module(name)
-            if mod and hasattr(mod, "retranslate"):
-                try:
-                    mod.retranslate()
-                except Exception as e:
-                    print(f"[i18n] retranslate {name}: {e}")
 
     def _refresh_module_meta(self):
         for m in self.modules:
