@@ -18,12 +18,15 @@
   "btn_installed": "Installed",
   "btn_reinstall": "Reinstall",
   "btn_downloading": "Downloading...",
+  "btn_update_all": "Update All",
   "btn_error": "Error",
   "btn_retry": "Retry",
   "btn_remove": "Remove",
   "btn_close": "Close",
   "btn_restore_defaults": "Restore Defaults",
   "lbl_official": " (Official)",
+  "msg_no_updates": "No updates available.",
+  "msg_updates_done": "All updates installed successfully.",
   "msg_success_title": "Success",
   "msg_success_text": "Installed successfully! Go to 'Modules' -> 'Apply' to load the new component.",
   "msg_error_title": "Error",
@@ -34,5 +37,7 @@
   "dlg_add_repo_title": "Add Repository",
   "dlg_add_repo_text": "Enter GitHub repository (format: owner/repo):\nExample: FreshLend/SWARM-Store",
   "dlg_manage_repos_title": "Manage Repositories",
-  "meta_info": "v{version} by {author}\n{category}"
+  "meta_info": "v{version} by {author}\n{category}",
+  "security_warning_title": "Security Warning",
+  "security_warning_text": "You are adding a third-party repository. Modules and themes from untrusted sources can contain malicious code that could harm your computer.\n\nOnly add repositories from authors you trust.\n\nDo you want to continue?"
 }

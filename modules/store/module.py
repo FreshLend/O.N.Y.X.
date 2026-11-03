@@ -22,10 +22,18 @@ DEFAULT_REPOS = [
 ]
 CONFIG_FILE = Path("config") / "store_repos.json"
 
-
 def T(key, **kwargs):
     return tr(key, module="store", **kwargs)
 
+class ResizableWidget(QWidget):
+    def __init__(self, callback, parent=None):
+        super().__init__(parent)
+        self.resize_callback = callback
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.resize_callback:
+            self.resize_callback()
 
 class DownloadWorker(QThread):
     finished = Signal(bool, str)
@@ -38,25 +46,46 @@ class DownloadWorker(QThread):
         self.owner = owner
         self.repo = repo
         self.branch = branch
+        self.running = True
+
+    def stop(self):
+        self.running = False
 
     def run(self):
         try:
+            base_dir_abs = os.path.abspath(self.target_dir)
+            
             for file_info in self.files:
+                if not self.running:
+                    self.finished.emit(False, "Cancelled by user.")
+                    return
+                    
                 rel_path = file_info['path'].replace(self.base_path, "").lstrip("/")
                 if not rel_path:
                     continue
                     
-                dst = os.path.join(self.target_dir, rel_path)
+                dst = os.path.abspath(os.path.join(self.target_dir, rel_path))
+                
+                if not dst.startswith(base_dir_abs + os.sep):
+                    continue
+                    
                 if file_info['type'] == 'tree':
                     os.makedirs(dst, exist_ok=True)
                 elif file_info['type'] == 'blob':
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
                     raw_url = f"https://raw.githubusercontent.com/{self.owner}/{self.repo}/{self.branch}/{file_info['path']}"
-                    r = requests.get(raw_url, timeout=15)
+                    
+                    r = requests.get(raw_url, timeout=15, stream=True)
                     r.raise_for_status()
                     with open(dst, 'wb') as f:
-                        f.write(r.content)
-            self.finished.emit(True, "Installed successfully.")
+                        for chunk in r.iter_content(chunk_size=8192):
+                            if not self.running:
+                                break
+                            if chunk:
+                                f.write(chunk)
+                                
+            if self.running:
+                self.finished.emit(True, "Installed successfully.")
         except Exception as e:
             self.finished.emit(False, str(e))
 
@@ -67,11 +96,18 @@ class FetchWorker(QThread):
     def __init__(self, repos):
         super().__init__()
         self.repos = repos
+        self.running = True
+
+    def stop(self):
+        self.running = False
 
     def run(self):
         all_items = []
         error = ""
         for r_data in self.repos:
+            if not self.running:
+                break
+                
             owner, repo, branch = r_data["owner"], r_data["repo"], r_data["branch"]
             try:
                 url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
@@ -80,6 +116,9 @@ class FetchWorker(QThread):
                 tree = r.json().get("tree", [])
                 
                 for node in tree:
+                    if not self.running:
+                        break
+                        
                     path = node['path']
                     parts = path.split('/')
                     if len(parts) == 3 and parts[0] in ('modules', 'styles') and node['type'] == 'tree':
@@ -87,6 +126,9 @@ class FetchWorker(QThread):
                         item_name = parts[2]
                         cat_name = parts[1]
                         
+                        if ".." in item_name or "/" in item_name or "\\" in item_name:
+                            continue
+                            
                         meta_path = f"{path}/metadata.json" if item_type == "Module" else f"{path}/theme.json"
                         meta = {}
                         meta_node = next((n for n in tree if n['path'] == meta_path), None)
@@ -114,8 +156,9 @@ class FetchWorker(QThread):
                         })
             except Exception as e:
                 error += f"Failed to fetch {owner}/{repo}: {e}\n"
-        self.finished.emit(all_items, error)
-
+                
+        if self.running:
+            self.finished.emit(all_items, error)
 
 class ManageReposDialog(QDialog):
     def __init__(self, parent, repos):
@@ -181,13 +224,7 @@ class ManageReposDialog(QDialog):
             self.repos.append(r.copy())
         self._refresh()
 
-
 class StoreModule(BaseModule):
-    name = "Store"
-    description = "Browse and install modules and themes."
-    version = "1.0.0"
-    icon_name = "database"
-
     def __init__(self):
         self.widget = None
         self.repos = []
@@ -201,8 +238,15 @@ class StoreModule(BaseModule):
         self.btn_add_repo = None
         self.btn_manage_repos = None
         self.btn_refresh = None
+        self.btn_update_all = None
+        self.lbl_status = None
         self.fetch_worker = None
         self.dl_workers = []
+        
+        self.current_tab_type = "Module"
+        self.current_cols = 3
+        self.update_queue = []
+        self.is_mass_updating = False
 
     def on_load(self, api):
         self._load_repos()
@@ -236,6 +280,11 @@ class StoreModule(BaseModule):
         self.btn_manage_repos = QPushButton()
         self.btn_manage_repos.clicked.connect(self._manage_repos_dialog)
         top_bar.addWidget(self.btn_manage_repos)
+        
+        self.btn_update_all = QPushButton()
+        self.btn_update_all.setEnabled(False)
+        self.btn_update_all.clicked.connect(self._update_all)
+        top_bar.addWidget(self.btn_update_all)
 
         self.btn_refresh = QPushButton()
         self.btn_refresh.clicked.connect(self._fetch_data)
@@ -243,24 +292,30 @@ class StoreModule(BaseModule):
         
         layout.addLayout(top_bar)
 
+        self.lbl_status = QLabel("")
+        self.lbl_status.setAlignment(Qt.AlignCenter)
+        self.lbl_status.setStyleSheet(f"color: {color('fg_dim')}; font-size: 14px; margin: 10px;")
+        layout.addWidget(self.lbl_status)
+
         self.tabs = QTabWidget()
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         
         self.modules_scroll = QScrollArea()
         self.modules_scroll.setWidgetResizable(True)
         self.modules_scroll.setFrameShape(QFrame.NoFrame)
-        self.modules_container = QWidget()
+        self.modules_container = ResizableWidget(self._on_container_resize)
         self.modules_grid = QGridLayout(self.modules_container)
         self.modules_grid.setSpacing(16)
-        self.modules_grid.setAlignment(Qt.AlignTop)
+        self.modules_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.modules_scroll.setWidget(self.modules_container)
         
         self.themes_scroll = QScrollArea()
         self.themes_scroll.setWidgetResizable(True)
         self.themes_scroll.setFrameShape(QFrame.NoFrame)
-        self.themes_container = QWidget()
+        self.themes_container = ResizableWidget(self._on_container_resize)
         self.themes_grid = QGridLayout(self.themes_container)
         self.themes_grid.setSpacing(16)
-        self.themes_grid.setAlignment(Qt.AlignTop)
+        self.themes_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.themes_scroll.setWidget(self.themes_container)
 
         self.tabs.addTab(self.modules_scroll, T("tab_modules"))
@@ -270,6 +325,15 @@ class StoreModule(BaseModule):
         self.retranslate()
         self._fetch_data()
         return self.widget
+
+    def _on_container_resize(self):
+        if not self.modules_scroll:
+            return
+        width = self.modules_scroll.viewport().width()
+        cols = max(1, (width - 32) // 296)
+        if cols != self.current_cols:
+            self.current_cols = cols
+            self._filter()
 
     def retranslate(self):
         self.name = T("name", default="Store")
@@ -282,11 +346,17 @@ class StoreModule(BaseModule):
         self.author_filter.setItemText(0, T("all_authors"))
         self.btn_add_repo.setText(T("btn_add_repo"))
         self.btn_manage_repos.setText(T("btn_manage_repos"))
+        self.btn_update_all.setText(T("btn_update_all"))
         self.btn_refresh.setText(T("btn_refresh"))
         self.tabs.setTabText(0, T("tab_modules"))
         self.tabs.setTabText(1, T("tab_themes"))
         
-        self._render()
+        self._filter()
+
+    def _on_tab_changed(self, index=None):
+        self.current_tab_type = "Module" if self.tabs.currentIndex() == 0 else "Theme"
+        self._update_filters()
+        self._filter()
 
     def _load_repos(self):
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -321,6 +391,17 @@ class StoreModule(BaseModule):
                 if any(r["owner"] == owner and r["repo"] == repo for r in self.repos):
                     QMessageBox.information(self.widget, T("msg_success_title"), T("msg_repo_exists"))
                     return
+
+                reply = QMessageBox.warning(
+                    self.widget,
+                    T("security_warning_title"),
+                    T("security_warning_text"),
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                
+                if reply != QMessageBox.Yes:
+                    return
                 
                 self.repos.append({
                     "owner": owner, "repo": repo, "branch": "main"
@@ -340,21 +421,53 @@ class StoreModule(BaseModule):
         if self.fetch_worker and self.fetch_worker.isRunning():
             return
         
+        self.btn_update_all.setEnabled(False)
         self._clear_grids()
-        loading = QLabel(T("msg_fetching"))
-        loading.setAlignment(Qt.AlignCenter)
-        self.modules_grid.addWidget(loading, 0, 0)
+        self.lbl_status.setText(T("msg_fetching"))
+        self.lbl_status.show()
 
         self.fetch_worker = FetchWorker(self.repos)
         self.fetch_worker.finished.connect(self._on_fetched)
         self.fetch_worker.start()
 
     def _on_fetched(self, items, error):
+        self.lbl_status.hide()
         self.remote_items = items
         self._update_filters()
-        self._render()
+        self._filter()
+        self.btn_update_all.setEnabled(self._has_updates())
         if error:
             print(f"[Store] Errors during fetch: {error}")
+
+    def _has_updates(self):
+        for item in self.remote_items:
+            local_v = self._get_local_version(item)
+            if local_v != "0.0.0":
+                remote_v = self._version_tuple(item["version"])
+                if remote_v > self._version_tuple(local_v):
+                    return True
+        return False
+
+    def _get_local_version(self, item):
+        install_path = Path("modules" if item["type"] == "Module" else "styles") / item["folder_name"]
+        if not install_path.exists():
+            return "0.0.0"
+        meta_file = install_path / ("metadata.json" if item["type"] == "Module" else "theme.json")
+        if meta_file.exists():
+            try:
+                with open(meta_file, "r", encoding="utf-8") as f:
+                    local_meta = json.load(f)
+                    return str(local_meta.get("version", "0.0.0"))
+            except Exception:
+                pass
+        return "0.0.0"
+
+    def _version_tuple(self, v):
+        try:
+            parts = str(v).split(".")
+            return tuple(int(x) for x in parts[:3]) + (0,) * (3 - len(parts))
+        except Exception:
+            return (0, 0, 0)
 
     def _update_filters(self):
         self.category_filter.blockSignals(True)
@@ -368,11 +481,13 @@ class StoreModule(BaseModule):
         self.author_filter.clear()
         self.author_filter.addItem(T("all_authors"), "all")
         
-        cats = sorted(set(item["category"] for item in self.remote_items))
+        filtered_items = [i for i in self.remote_items if i["type"] == self.current_tab_type]
+        
+        cats = sorted(set(item["category"] for item in filtered_items))
         for c in cats:
             self.category_filter.addItem(c.capitalize(), c)
             
-        authors = sorted(set(item["author"] for item in self.remote_items))
+        authors = sorted(set(item["author"] for item in filtered_items))
         for a in authors:
             self.author_filter.addItem(a, a)
             
@@ -395,33 +510,56 @@ class StoreModule(BaseModule):
                 if w:
                     w.deleteLater()
 
-    def _render(self):
+    def _filter(self):
+        text = self.search_input.text().strip().lower()
+        cat = self.category_filter.currentData()
+        auth = self.author_filter.currentData()
+
+        display_items = []
+        for item in self.remote_items:
+            if item["type"] != self.current_tab_type:
+                continue
+                
+            match_text = text in f"{item['name']} {item['description']}".lower()
+            match_cat = (cat == "all") or (item["category"] == cat)
+            match_auth = (auth == "all") or (item["author"] == auth)
+            
+            if match_text and match_cat and match_auth:
+                display_items.append(item)
+
+        self._render(display_items)
+
+    def _render(self, display_items):
         if not self.modules_grid or not self.themes_grid:
             return
             
         self._clear_grids()
         
+        if self.current_cols <= 0:
+            self.current_cols = 3
+            
         mod_row, theme_row = 0, 0
-        for item in self.remote_items:
+        for item in display_items:
             card = self._create_card(item)
             if item["type"] == "Module":
-                self.modules_grid.addWidget(card, mod_row // 3, mod_row % 3)
+                self.modules_grid.addWidget(card, mod_row // self.current_cols, mod_row % self.current_cols)
                 mod_row += 1
             else:
-                self.themes_grid.addWidget(card, theme_row // 3, theme_row % 3)
+                self.themes_grid.addWidget(card, theme_row // self.current_cols, theme_row % self.current_cols)
                 theme_row += 1
 
-        if mod_row == 0:
-            self.modules_grid.addWidget(QLabel(T("msg_no_modules")), 0, 0)
-        if theme_row == 0:
-            self.themes_grid.addWidget(QLabel(T("msg_no_themes")), 0, 0)
+        for i in range(self.current_cols):
+            self.modules_grid.setColumnStretch(i, 1)
+            self.themes_grid.setColumnStretch(i, 1)
 
-    def _version_tuple(self, v):
-        try:
-            parts = str(v).split(".")
-            return tuple(int(x) for x in parts[:3]) + (0,) * (3 - len(parts))
-        except Exception:
-            return (0, 0, 0)
+        if mod_row == 0:
+            lbl = QLabel(T("msg_no_modules"))
+            lbl.setAlignment(Qt.AlignCenter)
+            self.modules_grid.addWidget(lbl, 0, 0, 1, self.current_cols)
+        if theme_row == 0:
+            lbl = QLabel(T("msg_no_themes"))
+            lbl.setAlignment(Qt.AlignCenter)
+            self.themes_grid.addWidget(lbl, 0, 0, 1, self.current_cols)
 
     def _create_card(self, item):
         card = QFrame()
@@ -456,20 +594,9 @@ class StoreModule(BaseModule):
         desc.setWordWrap(True)
         layout.addWidget(desc, 1)
         
-        install_path = Path("modules" if item["type"] == "Module" else "styles") / item["folder_name"]
-        is_installed = install_path.exists()
-        local_version = "0.0.0"
-
-        if is_installed:
-            meta_file = install_path / ("metadata.json" if item["type"] == "Module" else "theme.json")
-            if meta_file.exists():
-                try:
-                    with open(meta_file, "r", encoding="utf-8") as f:
-                        local_meta = json.load(f)
-                        local_version = str(local_meta.get("version", "0.0.0"))
-                except Exception:
-                    pass
-
+        local_version = self._get_local_version(item)
+        is_installed = local_version != "0.0.0"
+        
         btn = QPushButton()
         btn.setFixedHeight(30)
 
@@ -494,17 +621,12 @@ class StoreModule(BaseModule):
             btn.clicked.connect(lambda: self._install(item, btn))
 
         layout.addWidget(btn)
-        
-        search_text = f"{item['name']} {item['description']}".lower()
-        card.setProperty("search_text", search_text)
-        card.setProperty("category", item["category"])
-        card.setProperty("author", item["author"])
-        
         return card
 
     def _install(self, item, btn):
-        btn.setText(T("btn_downloading"))
-        btn.setEnabled(False)
+        if btn:
+            btn.setText(T("btn_downloading"))
+            btn.setEnabled(False)
         
         api_url = f"https://api.github.com/repos/{item['owner']}/{item['repo']}/git/trees/{item['branch']}?recursive=1"
         try:
@@ -512,9 +634,12 @@ class StoreModule(BaseModule):
             r.raise_for_status()
             tree = r.json().get("tree", [])
         except Exception as e:
-            btn.setText(T("btn_error"))
-            btn.setEnabled(True)
+            if btn:
+                btn.setText(T("btn_error"))
+                btn.setEnabled(True)
             QMessageBox.critical(self.widget, T("msg_error_title"), T("msg_error_tree", error=e))
+            if self.is_mass_updating:
+                self._process_update_queue()
             return
 
         files = [node for node in tree if node['path'].startswith(item['path'])]
@@ -527,58 +652,80 @@ class StoreModule(BaseModule):
             files, str(target_dir), item['path'], 
             item['owner'], item['repo'], item['branch']
         )
-        worker.finished.connect(lambda ok, msg: self._on_install_done(ok, msg, btn))
+        worker.finished.connect(lambda ok, msg: self._on_install_done(ok, msg, item, btn))
         self.dl_workers.append(worker)
         worker.start()
 
-    def _on_install_done(self, ok, msg, btn):
+    def _on_install_done(self, ok, msg, item, btn):
         if ok:
-            btn.setText(T("btn_installed"))
-            btn.setStyleSheet(f"background-color: {color('success')}; color: #000; font-weight: bold;")
-            btn.setEnabled(False)
+            if btn:
+                btn.setText(T("btn_installed"))
+                btn.setStyleSheet(f"background-color: {color('success')}; color: #000; font-weight: bold;")
+                btn.setEnabled(False)
+            
+            if not self.is_mass_updating:
+                try:
+                    get_bus().call("core.reload_modules")
+                    success_text = T("msg_success_auto")
+                except Exception as e:
+                    print(f"[Store] Auto-reload failed: {e}")
+                    success_text = T("msg_success_text")
+
+                QMessageBox.information(self.widget, T("msg_success_title"), success_text)
+            else:
+                self._process_update_queue()
+        else:
+            if btn:
+                btn.setText(T("btn_retry"))
+                btn.setEnabled(True)
+            QMessageBox.critical(self.widget, T("msg_error_title"), T("msg_error_install", error=msg))
+            if self.is_mass_updating:
+                self.is_mass_updating = False
+                self.btn_update_all.setEnabled(self._has_updates())
+                QMessageBox.warning(self.widget, T("msg_error_title"), "Update process stopped due to an error.")
+
+    def _update_all(self):
+        if self.is_mass_updating:
+            return
+            
+        updates = []
+        for item in self.remote_items:
+            local_v = self._get_local_version(item)
+            if local_v != "0.0.0":
+                remote_v = self._version_tuple(item["version"])
+                if remote_v > self._version_tuple(local_v):
+                    updates.append(item)
+                    
+        if not updates:
+            return
+            
+        self.is_mass_updating = True
+        self.update_queue = updates
+        self.btn_update_all.setEnabled(False)
+        self._process_update_queue()
+
+    def _process_update_queue(self):
+        if not self.update_queue:
+            self.is_mass_updating = False
+            self.btn_update_all.setEnabled(self._has_updates())
             
             try:
                 get_bus().call("core.reload_modules")
-                success_text = T("msg_success_auto")
-            except Exception as e:
-                print(f"[Store] Auto-reload failed: {e}")
-                success_text = T("msg_success_text")
-
-            QMessageBox.information(
-                self.widget, T("msg_success_title"), success_text
-            )
-        else:
-            btn.setText(T("btn_retry"))
-            btn.setEnabled(True)
-            QMessageBox.critical(self.widget, T("msg_error_title"), T("msg_error_install", error=msg))
-
-    def _filter(self):
-        text = self.search_input.text().strip().lower()
-        cat = self.category_filter.currentData()
-        auth = self.author_filter.currentData()
-
-        for grid in (self.modules_grid, self.themes_grid):
-            for i in range(grid.count()):
-                w = grid.itemAt(i).widget()
-                if w and isinstance(w, QFrame):
-                    search_text = w.property("search_text") or ""
-                    item_cat = w.property("category")
-                    item_auth = w.property("author")
-                    
-                    match_text = text in search_text
-                    match_cat = (cat == "all") or (item_cat == cat)
-                    match_auth = (auth == "all") or (item_auth == auth)
-                    
-                    if match_text and match_cat and match_auth:
-                        w.show()
-                    else:
-                        w.hide()
+            except Exception:
+                pass
+                
+            QMessageBox.information(self.widget, T("btn_update_all"), T("msg_updates_done"))
+            return
+            
+        item = self.update_queue.pop(0)
+        self._install(item, None)
 
     def on_shutdown(self):
         if self.fetch_worker and self.fetch_worker.isRunning():
-            self.fetch_worker.terminate()
-            self.fetch_worker.wait()
+            self.fetch_worker.stop()
+            self.fetch_worker.wait(2000)
+            
         for w in self.dl_workers:
             if w.isRunning():
-                w.terminate()
-                w.wait()
+                w.stop()
+                w.wait(2000)

@@ -1,6 +1,7 @@
 {
   "name": "Store",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "author": "SWARM",
-  "description": "Download and install modules and themes directly from GitHub repositories."
+  "description": "Download and install modules and themes directly from GitHub repositories.",
+  "icon_name": "database"
 }
