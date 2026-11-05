@@ -1,0 +1,10 @@
+{
+  "name": "History",
+  "version": "1.0.0",
+  "author": "FreshGame",
+  "description": "Request history database for modules",
+  "icon": "H",
+  "icon_name": "database",
+  "dependencies": {},
+  "optional_dependencies": {}
+}

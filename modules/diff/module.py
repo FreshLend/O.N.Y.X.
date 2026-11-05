@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
 )
 
 from core.base_module import BaseModule
-from core.history import get_history
 from core.i18n import tr
 from core.utils import color as _c, parent_widget
 from styles import loader as theme_loader
@@ -288,15 +287,18 @@ class DiffModule(BaseModule):
             self.result.show()
 
     def _load_from_history(self):
-        rows = get_history().list(limit=2)
+        bus = get_bus()
+        rows = bus.try_call("history.list", limit=2, default=[]) or []
         if len(rows) < 2:
             QMessageBox.information(
                 parent_widget(self._widget),
                 tr("history.title", module="diff"),
                 tr("history.need_two", module="diff"))
             return
-        r1 = get_history().get(rows[0]["id"])
-        r2 = get_history().get(rows[1]["id"])
+        r1 = bus.try_call("history.get", rows[0]["id"])
+        r2 = bus.try_call("history.get", rows[1]["id"])
+        if not r1 or not r2:
+            return
         self.a_edit.setPlainText(r2.get("response_body") or "")
         self.b_edit.setPlainText(r1.get("response_body") or "")
 

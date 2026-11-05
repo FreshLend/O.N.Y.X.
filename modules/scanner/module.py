@@ -95,7 +95,8 @@ class ScanWorker(QThread):
         proxy = self._pick_proxy()
         try:
             kwargs = dict(headers=headers, body="", timeout=self.timeout,
-                          allow_redirects=self.follow_redirects)
+                          allow_redirects=self.follow_redirects,
+                          caller="Scanner")
             if proxy:
                 kwargs["proxies"] = {"http": proxy, "https": proxy}
             return get_bus().call("http.request", "GET", url, **kwargs)
@@ -219,9 +220,8 @@ class ScannerModule(BaseModule):
         def probe(url):
             try:
                 kwargs = dict(headers={"User-Agent": USER_AGENTS[0]}, body="",
-                              timeout=timeout, allow_redirects=False)
-                if caller:
-                    kwargs["caller"] = caller
+                              timeout=timeout, allow_redirects=False,
+                              caller=caller or "Scanner")
                 if session:
                     kwargs["session"] = session
                 return bus.call("http.request", "GET", url, **kwargs)
@@ -254,8 +254,7 @@ class ScannerModule(BaseModule):
                                   timeout=timeout, allow_redirects=False)
                     if proxies:
                         kwargs["proxies"] = proxies
-                    if caller:
-                        kwargs["caller"] = caller
+                    kwargs["caller"] = caller or "Scanner"
                     if session:
                         kwargs["session"] = session
                     r = bus.call("http.request", "GET", url, **kwargs)

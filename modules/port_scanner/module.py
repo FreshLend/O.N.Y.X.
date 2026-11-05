@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
 
 from core.base_module import BaseModule
 from core.module_api import get_bus
-from core.history import get_history
 from core.i18n import tr
 from core.utils import color as _c, parent_widget
 from styles import loader as theme_loader
@@ -795,11 +794,13 @@ class PortScannerModule(BaseModule):
         try:
             mod_label = caller or self.name
             host_label = host if isinstance(host, str) else ",".join(host)
-            get_history().add(
+            get_bus().try_call(
+                "history.add",
                 module=mod_label, session=session, method="SCAN",
                 url=f"{host_label}  ({len(ports)} ports, {scan_mode})",
                 headers={}, body="", status=len(results),
-                response_body=json.dumps(results[:50], default=str)[:4000],
+                response_body=json.dumps(
+                    results[:50], default=str)[:4000],
                 elapsed=0.0)
         except Exception:
             pass
@@ -1283,11 +1284,22 @@ class PortScannerModule(BaseModule):
         except RuntimeError:
             pass
 
+        open_results = [r for r in results if r["status"] == "open"]
+
         try:
             get_bus().call("vault.set", "portscan.last",
-                           json.dumps([r for r in results
-                                       if r["status"] == "open"],
-                                      ensure_ascii=False))
+                           json.dumps(open_results, ensure_ascii=False))
+        except Exception:
+            pass
+
+        try:
+            get_bus().try_call(
+                "history.add",
+                module=self.name, session=None, method="SCAN",
+                url=f"{self.targets_input.text()} ({len(results)} ports)",
+                headers={}, body="", status=open_count,
+                response_body=json.dumps(open_results[:50], default=str)[:4000],
+                elapsed=duration)
         except Exception:
             pass
 

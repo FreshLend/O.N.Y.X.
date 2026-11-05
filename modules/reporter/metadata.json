@@ -1,10 +1,12 @@
 {
   "name": "Reporter",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "FreshGame",
   "description": "Build reports from request history and export them.",
   "icon": "📝",
   "icon_name": "reporter",
-  "dependencies": {},
+  "dependencies": {
+    "history": ">=1.0.0"
+  },
   "optional_dependencies": {}
 }

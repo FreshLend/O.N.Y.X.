@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.base_module import BaseModule
-from core.history import get_history
+from core.module_api import get_bus
 from core.i18n import tr
 from core.utils import color as _c, parent_widget
 from styles import loader as theme_loader
@@ -108,17 +108,25 @@ class ReporterModule(BaseModule):
         api.register_service(self.name, "reporter.compare", self._svc_compare,
                              "reporter.compare(snap_a, snap_b) -> dict")
 
+    def _fetch_history(self, **kwargs):
+        try:
+            return get_bus().try_call("history.fetch", **kwargs) or []
+        except Exception:
+            return []
+
+    def _history_call(self, service, default=None, **kwargs):
+        try:
+            return get_bus().try_call(service, default=default, **kwargs)
+        except Exception:
+            return default
+
     def _svc_generate(self, fmt="Markdown", limit=100,
                       only_errors=False, module=None, session=None,
                       format=None, **kwargs) -> str:
         if format is not None:
             fmt = format
-        rows = get_history().list(module=module, session=session, limit=limit)
-        records = []
-        for r in rows:
-            rec = get_history().get(r["id"])
-            if rec:
-                records.append(rec)
+        records = self._fetch_history(
+            module=module, session=session, limit=limit)
         if only_errors:
             records = [r for r in records if self._is_problem(r)]
         return self._render_full(records, fmt)
@@ -168,7 +176,7 @@ class ReporterModule(BaseModule):
         }
 
     def _fetch_raw(self, filters):
-        return get_history().list(
+        return self._fetch_history(
             module=filters.get("module"),
             session=filters.get("session"),
             limit=filters.get("limit", 500),
@@ -416,7 +424,7 @@ class ReporterModule(BaseModule):
         self.module_filter.clear()
         self.module_filter.addItem(tr("all", module="reporter"))
         try:
-            for name in get_history().modules():
+            for name in self._history_call("history.modules", default=[]) or []:
                 self.module_filter.addItem(name)
         except Exception:
             pass
@@ -432,7 +440,9 @@ class ReporterModule(BaseModule):
         self.session_filter.addItem(tr("all", module="reporter"))
         try:
             module = self._selected_module()
-            for sid in get_history().sessions(module=module):
+            sessions = self._history_call(
+                "history.sessions", module=module, default=[]) or []
+            for sid in sessions:
                 self.session_filter.addItem(sid)
         except Exception:
             pass
@@ -447,13 +457,8 @@ class ReporterModule(BaseModule):
         since = self._selected_since()
         limit = self.limit.value()
 
-        rows = get_history().list(
+        records = self._fetch_history(
             module=module, session=session, limit=limit, since=since)
-        records = []
-        for r in rows:
-            rec = get_history().get(r["id"])
-            if rec:
-                records.append(rec)
 
         if self.problems_only.isChecked():
             records = [r for r in records if self._is_problem(r)]
@@ -978,8 +983,10 @@ class ReporterModule(BaseModule):
             return
 
         try:
-            rows = get_history().list(module=module, session=session,
-                                      limit=1000000, since=since)
+            rows = self._history_call(
+                "history.list", default=[],
+                module=module, session=session,
+                limit=1000000, since=since) or []
             ids = [r["id"] for r in rows]
         except Exception as e:
             QMessageBox.warning(parent_widget(self._widget),
@@ -999,14 +1006,14 @@ class ReporterModule(BaseModule):
         ) != QMessageBox.Yes:
             return
 
-        get_history().delete_ids(ids)
+        self._history_call("history.delete_ids", ids, default=0)
         self.out.clear()
         self.status.setText(
             tr("status.cleared_filtered", module="reporter", count=len(ids)))
         self._refresh_all()
 
     def _clear_all(self):
-        n = get_history().count()
+        n = self._history_call("history.count", default=0) or 0
         if n == 0:
             QMessageBox.information(parent_widget(self._widget),
                                     tr("msg.empty.title", module="reporter"),
@@ -1018,7 +1025,7 @@ class ReporterModule(BaseModule):
             tr("msg.confirm_all.text", module="reporter", count=n)
         ) != QMessageBox.Yes:
             return
-        get_history().clear()
+        self._history_call("history.clear")
         self.out.clear()
         self.status.setText(
             tr("status.cleared_all", module="reporter", count=n))

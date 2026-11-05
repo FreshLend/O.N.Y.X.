@@ -1,6 +1,6 @@
 {
   "name": "System Test",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "FreshGame",
   "description": "End-to-end self-check.",
   "icon": "🧪",
@@ -17,6 +17,7 @@
     "reporter": ">=1.0.0",
     "diff": ">=1.0.0",
     "collections": ">=1.0.0",
-    "websocket": ">=1.0.0"
+    "websocket": ">=1.0.0",
+    "history": ">=1.0.0"
   }
 }

@@ -23,7 +23,6 @@ except ImportError:
 
 from core.base_module import BaseModule
 from core.module_api import get_bus
-from core.history import get_history
 from core.i18n import tr
 from core.utils import (
     color as _c, parent_widget, parse_headers, resolve_placeholders,
@@ -213,7 +212,6 @@ class WebSocketModule(BaseModule):
         self._labels = {}
         self._buttons = {}
         self._checks = {}
-        self._history = get_history()
         self._log_widget = None
         self._mono = None
 
@@ -250,6 +248,12 @@ class WebSocketModule(BaseModule):
                 w.wait(3000)
             except Exception:
                 pass
+
+    def _history_add(self, **kwargs):
+        try:
+            get_bus().try_call("history.add", **kwargs)
+        except Exception:
+            pass
 
     def _svc_available(self):
         return HAS_WEBSOCKET
@@ -474,7 +478,7 @@ class WebSocketModule(BaseModule):
         except Exception:
             pass
         try:
-            self._history.add(
+            self._history_add(
                 module=self.name, session=None, method="WS",
                 url=url, headers={}, body="",
                 status=101, response_body="opened", elapsed=0.0)
@@ -514,7 +518,7 @@ class WebSocketModule(BaseModule):
         except Exception:
             pass
         try:
-            self._history.add(
+            self._history_add(
                 module=self.name, session=None, method="WS",
                 url=url, headers={}, body="",
                 status=code, response_body=reason or "closed", elapsed=0.0)

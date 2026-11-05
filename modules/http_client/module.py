@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
 from core.base_module import BaseModule
 from core.module_api import get_bus
 from core.settings import get_settings
-from core.history import get_history
 from core.i18n import tr
 from core.utils import (
     color as _c, parent_widget, parse_headers as _parse_headers,
@@ -648,7 +647,6 @@ class HttpClientModule(BaseModule):
     def __init__(self):
         super().__init__()
         self.settings = get_settings()
-        self.history = get_history()
         self._widget = None
         self._snippets = []
         self.worker = None
@@ -703,6 +701,31 @@ class HttpClientModule(BaseModule):
                              self._svc_sessions_clear,
                              "http.sessions.clear() -> bool")
 
+    def _history_add(self, **kwargs):
+        try:
+            return get_bus().try_call("history.add", **kwargs)
+        except Exception as e:
+            _log(f"history.add failed: {e}")
+            return None
+
+    def _history_list(self, **kwargs):
+        try:
+            return get_bus().try_call("history.list", **kwargs) or []
+        except Exception:
+            return []
+
+    def _history_get(self, rid):
+        try:
+            return get_bus().try_call("history.get", rid)
+        except Exception:
+            return None
+
+    def _history_clear(self, **kwargs):
+        try:
+            get_bus().try_call("history.clear", **kwargs)
+        except Exception:
+            pass
+
     def _svc_request(self, method, url, headers=None, body=None,
                     timeout=30, verify=True, allow_redirects=True,
                     engine="requests", proxies=None,
@@ -737,7 +760,7 @@ class HttpClientModule(BaseModule):
         try:
             mod_label = caller or self.name
             if result.get("ok"):
-                self.history.add(
+                self._history_add(
                     module=mod_label, session=session,
                     method=method, url=hist_url,
                     headers=hist_headers, body=hist_body,
@@ -746,7 +769,7 @@ class HttpClientModule(BaseModule):
                     elapsed=result.get("elapsed"),
                 )
             else:
-                self.history.add(
+                self._history_add(
                     module=mod_label, session=session,
                     method=method, url=hist_url,
                     headers=hist_headers, body=hist_body,
@@ -882,7 +905,6 @@ class HttpClientModule(BaseModule):
 
         self.mono = QFont("Consolas", 10)
         self.settings = get_settings()
-        self.history = get_history()
 
         layout.addLayout(self._build_profiles_bar())
 
@@ -1549,10 +1571,11 @@ class HttpClientModule(BaseModule):
                 f"color: {_c('danger')}; font-size: 12px; font-weight: bold;")
             self.resp_body_edit.setPlainText(f"ERROR:\n{err}")
             try:
-                self.history.add(
+                self._history_add(
                     module=self.name, method=self.method_box.currentText(),
                     url=self.url_input.text(),
-                    headers=_parse_headers_keep_placeholders(self.headers_edit.toPlainText()),
+                    headers=_parse_headers_keep_placeholders(
+                        self.headers_edit.toPlainText()),
                     body=self.body_edit.toPlainText(),
                     error=err)
             except Exception as e:
@@ -1612,11 +1635,12 @@ class HttpClientModule(BaseModule):
         self._last_response = data
 
         try:
-            self.history.add(
+            self._history_add(
                 module=self.name,
                 method=self.method_box.currentText(),
                 url=self.url_input.text(),
-                headers=_parse_headers_keep_placeholders(self.headers_edit.toPlainText()),
+                headers=_parse_headers_keep_placeholders(
+                    self.headers_edit.toPlainText()),
                 body=self.body_edit.toPlainText(),
                 status=status,
                 response_body=_limit_body(body),
@@ -1682,7 +1706,7 @@ class HttpClientModule(BaseModule):
                                    title=title[:60] if title else "-"))
 
     def _refresh_history(self):
-        rows = self.history.list(module=self.name, limit=300)
+        rows = self._history_list(module=self.name, limit=300)
         self.history_table.setRowCount(len(rows))
         success = QColor(_c("success"))
         warning = QColor(_c("warning"))
@@ -1783,14 +1807,15 @@ class HttpClientModule(BaseModule):
         rid = self._selected_history_row_id()
         if not rid:
             return
-        rec = self.history.get(rid)
+        rec = self._history_get(rid)
         if not rec:
             return
         self.method_box.setCurrentText(rec["method"] or "GET")
         self.url_input.setText(rec["url"] or "")
         try:
             headers = json.loads(rec["headers"]) if rec["headers"] else {}
-            self.headers_edit.setPlainText("\n".join(f"{k}: {v}" for k, v in headers.items()))
+            self.headers_edit.setPlainText(
+                "\n".join(f"{k}: {v}" for k, v in headers.items()))
         except Exception:
             self.headers_edit.setPlainText(rec["headers"] or "")
         self.body_edit.setPlainText(rec["body"] or "")
@@ -1800,7 +1825,7 @@ class HttpClientModule(BaseModule):
         rid = self._selected_history_row_id()
         if not rid:
             return
-        rec = self.history.get(rid)
+        rec = self._history_get(rid)
         if not rec:
             return
         try:
@@ -1808,9 +1833,9 @@ class HttpClientModule(BaseModule):
         except Exception:
             headers_dict = {}
         try:
-            curl = get_bus().call("http.curl.build", rec["method"] or "GET",
-                                    rec["url"] or "", headers_dict,
-                                    rec["body"] or "")
+            curl = get_bus().call(
+                "http.curl.build", rec["method"] or "GET",
+                rec["url"] or "", headers_dict, rec["body"] or "")
             if curl:
                 QGuiApplication.clipboard().setText(curl)
         except KeyError:
@@ -1824,7 +1849,7 @@ class HttpClientModule(BaseModule):
                module_name=self.name),
         ) != QMessageBox.Yes:
             return
-        self.history.clear(module=self.name)
+        self._history_clear(module=self.name)
         self._refresh_history()
 
     def _copy_request_as_curl(self):

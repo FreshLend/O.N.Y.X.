@@ -495,16 +495,25 @@ class SystemTestModule(BaseModule):
         def s_bus():
             modules = bus.list_modules()
             services = bus.list_services()
+            core_providers = {"MainWindow"}
             orphan = []
             for svc_name, meta in services.items():
                 provider = meta.get("provider")
-                if provider and provider not in modules:
+                if not provider:
+                    continue
+                if provider in core_providers:
+                    continue
+                if provider not in modules:
                     orphan.append(f"{svc_name}@{provider}")
             if orphan:
                 return False, f"orphan services: {orphan}"
+            core_svc = "core.reload_modules" in services
             mod_list = ", ".join(sorted(modules))
-            return True, (f"modules={len(modules)}  services={len(services)}\n"
-                          f"loaded: {mod_list}")
+            return True, (
+                f"modules={len(modules)}  services={len(services)}"
+                f"  core.reload_modules={'yes' if core_svc else 'no'}\n"
+                f"loaded: {mod_list}"
+            )
 
         def s_health():
             _require("http.request")
@@ -984,22 +993,26 @@ class SystemTestModule(BaseModule):
             return text.startswith("<!doctype html>"), f"len={len(text)}"
 
         def s_history():
-            from core.history import get_history
-            rows = get_history().list(limit=5)
+            _require("history.list")
+            rows = bus.try_call("history.list", limit=5, default=[]) or []
             if not rows:
-                return True, "skipped (no history rows yet)"
+                return True, "skipped (history disabled or empty)"
             return len(rows) > 0, f"records={len(rows)}"
 
         def s_history_caller():
-            from core.history import get_history
-            rows = get_history().list(module=module_self.CALLER, limit=5)
+            _require("history.list")
+            rows = bus.try_call(
+                "history.list", module=module_self.CALLER,
+                limit=5, default=[]) or []
             if not rows:
                 return True, "skipped (no rows for this caller)"
             return len(rows) > 0, f"caller records={len(rows)}"
 
         def s_history_session():
-            from core.history import get_history
-            rows = get_history().list(session=session, limit=500)
+            _require("history.list")
+            rows = bus.try_call(
+                "history.list", session=session,
+                limit=500, default=[]) or []
             if not rows:
                 return True, "skipped (no session rows)"
             return True, f"session records={len(rows)}"

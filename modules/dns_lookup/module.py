@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
 
 from core.base_module import BaseModule
 from core.module_api import get_bus
-from core.history import get_history
 from core.i18n import tr
 from core.utils import color as _c, parent_widget
 from styles import loader as theme_loader
@@ -611,12 +610,14 @@ class DnsLookupModule(BaseModule):
             pass
 
         try:
-            get_history().add(
+            get_bus().try_call(
+                "history.add",
                 module=self.name, session=None, method="DNS",
                 url=self.domains_input.text()[:200],
                 headers={}, body="",
                 status=ok,
-                response_body=json.dumps(results[:30], ensure_ascii=False)[:4000],
+                response_body=json.dumps(
+                    results[:30], ensure_ascii=False)[:4000],
                 elapsed=duration)
         except Exception:
             pass

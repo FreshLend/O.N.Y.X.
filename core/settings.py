@@ -10,23 +10,7 @@ _DEFAULT = {
     },
     "theme": {
         "current": "onyx",
-    },
-    "proxy": {
-        "enabled": False,
-        "http": "",
-        "https": "",
-        "socks5": "",
-    },
-    "http_client": {
-        "impersonate": "chrome",
-        "last_request": {
-            "engine": "requests",
-            "timeout": 30,
-            "verify_ssl": True,
-            "follow_redirects": True,
-            "use_proxy": False,
-        },
-    },
+    }
 }
 
 

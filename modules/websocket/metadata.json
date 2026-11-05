@@ -1,6 +1,6 @@
 {
   "name": "WebSocket Client",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "FreshGame",
   "description": "Connect to WebSocket endpoints, send and receive messages in real time.",
   "icon": "📡",
@@ -8,6 +8,7 @@
   "dependencies": {},
   "optional_dependencies": {
     "vault": ">=1.0.0",
-    "proxy_manager": ">=1.0.0"
+    "proxy_manager": ">=1.0.0",
+    "history": ">=1.0.0"
   }
 }
