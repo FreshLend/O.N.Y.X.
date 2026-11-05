@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.base_module import BaseModule
+from core.module_api import get_bus
 from core.i18n import tr
 from core.utils import color as _c, parent_widget
 from styles import loader as theme_loader
